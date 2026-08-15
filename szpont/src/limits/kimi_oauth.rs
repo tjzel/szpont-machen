@@ -2,7 +2,7 @@ use serde_json::Value;
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
-use super::{ToolLimits, WindowUsage};
+use super::{Credentials, ToolLimits, WindowUsage};
 use crate::core::{ToolId, now_ms, read_to_string_capped};
 use crate::store::Store;
 
@@ -20,25 +20,50 @@ pub fn probe(store: &Store) -> Option<ToolLimits> {
 }
 
 fn access_token() -> Option<String> {
-    let root = ToolId::Kimi.home()?;
-    let path = root.join("credentials").join("kimi-code.json");
-    let text = read_to_string_capped(&path, crate::core::MAX_CREDENTIALS_BYTES)?;
-    let creds: Value = serde_json::from_str(&text).ok()?;
-    let expires_at = creds.get("expires_at").and_then(Value::as_i64);
-    if let Some(expires_at) = expires_at {
-        let expires_ms = if expires_at > 100_000_000_000 {
-            expires_at
-        } else {
-            expires_at.saturating_mul(1000)
-        };
-        if expires_ms <= now_ms() {
-            return None;
-        }
+    let creds = credentials_json()?;
+    if !matches!(credentials_state_of(&creds), Credentials::Valid) {
+        return None;
     }
     creds
         .get("access_token")
         .and_then(Value::as_str)
         .map(str::to_string)
+}
+
+pub(crate) fn credentials_state() -> Credentials {
+    credentials_json().map_or(Credentials::Missing, |creds| credentials_state_of(&creds))
+}
+
+fn credentials_json() -> Option<Value> {
+    let root = ToolId::Kimi.home()?;
+    let path = root.join("credentials").join("kimi-code.json");
+    let text = read_to_string_capped(&path, crate::core::MAX_CREDENTIALS_BYTES)?;
+    serde_json::from_str(&text).ok()
+}
+
+fn credentials_state_of(creds: &Value) -> Credentials {
+    if creds
+        .get("access_token")
+        .and_then(Value::as_str)
+        .is_none_or(str::is_empty)
+    {
+        return Credentials::Missing;
+    }
+    match creds.get("expires_at").and_then(Value::as_i64) {
+        Some(expires_at) => {
+            let expires_ms = if expires_at > 100_000_000_000 {
+                expires_at
+            } else {
+                expires_at.saturating_mul(1000)
+            };
+            if expires_ms <= now_ms() {
+                Credentials::Expired(expires_ms)
+            } else {
+                Credentials::Valid
+            }
+        }
+        None => Credentials::Valid,
+    }
 }
 
 fn base_url() -> String {
@@ -132,6 +157,7 @@ fn parse_response(body: &str, captured_at: i64) -> Option<ToolLimits> {
         captured_at,
         source: "kimi-api".to_string(),
         note: None,
+        stale_credentials: false,
     })
 }
 

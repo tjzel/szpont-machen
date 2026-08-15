@@ -34,6 +34,32 @@ pub struct ToolLimits {
     pub captured_at: i64,
     pub source: String,
     pub note: Option<String>,
+    #[serde(default)]
+    pub stale_credentials: bool,
+}
+
+pub(crate) enum Credentials {
+    Valid,
+    Expired(i64),
+    Missing,
+}
+
+impl Credentials {
+    pub(crate) fn note(&self, tool: ToolId) -> Option<String> {
+        let command = tool.as_str();
+        match self {
+            Credentials::Valid => None,
+            Credentials::Expired(at) => Some(format!(
+                "{} sign-in expired {} ago — run {command} to refresh it",
+                tool.display_name(),
+                crate::core::format_age(now_ms().saturating_sub(*at))
+            )),
+            Credentials::Missing => Some(format!(
+                "no {} credentials found — run {command} and sign in",
+                tool.display_name()
+            )),
+        }
+    }
 }
 
 pub fn collect(store: &Store) -> Vec<ToolLimits> {
@@ -95,6 +121,8 @@ fn claude_limits(store: &Store) -> Option<ToolLimits> {
         .ok()?;
     let ceiling_5h = calibrate_ceiling(store, "claude_ceiling_5h", tokens_5h);
     let ceiling_7d = calibrate_ceiling(store, "claude_ceiling_7d", tokens_7d);
+    let credentials = claude_oauth::credentials_state();
+    let stale_note = credentials.note(ToolId::Claude);
     Some(ToolLimits {
         tool: ToolId::Claude,
         windows: vec![
@@ -118,10 +146,14 @@ fn claude_limits(store: &Store) -> Option<ToolLimits> {
         plan: None,
         captured_at: now_ms(),
         source: "local-estimate".to_string(),
-        note: Some(
-            "estimated from local logs; % is relative to the largest window ever observed"
-                .to_string(),
-        ),
+        note: Some(stale_note.map_or_else(
+            || {
+                "estimated from local logs; % is relative to the largest window ever observed"
+                    .to_string()
+            },
+            |note| format!("{note}; showing local estimates until then"),
+        )),
+        stale_credentials: !matches!(credentials, Credentials::Valid),
     })
 }
 
@@ -162,13 +194,17 @@ fn kimi_limits(store: &Store) -> ToolLimits {
     if let Some(limits) = kimi_oauth::probe(store) {
         return limits;
     }
+    let credentials = kimi_oauth::credentials_state();
     ToolLimits {
         tool: ToolId::Kimi,
         windows: Vec::new(),
         plan: None,
         captured_at: now_ms(),
         source: "none".to_string(),
-        note: Some("Kimi keeps no limit data on disk".to_string()),
+        note: Some(credentials.note(ToolId::Kimi).unwrap_or_else(|| {
+            "Kimi keeps no limit data on disk; its usage endpoint did not answer".to_string()
+        })),
+        stale_credentials: !matches!(credentials, Credentials::Valid),
     }
 }
 
@@ -261,6 +297,7 @@ fn codex_limits() -> Option<ToolLimits> {
         captured_at: mtime_ms,
         source: "codex-rollout".to_string(),
         note,
+        stale_credentials: false,
     })
 }
 
@@ -312,6 +349,23 @@ pub(crate) fn humanize_window(minutes: i64) -> String {
 mod tests {
     use super::{ToolLimits, humanize_window, last_rate_limits, percent_of};
     #[test]
+    fn credential_states_explain_themselves_per_tool() {
+        use crate::core::ToolId;
+        assert!(super::Credentials::Valid.note(ToolId::Kimi).is_none());
+
+        let expired = super::Credentials::Expired(crate::core::now_ms() - 4 * 24 * 3600 * 1000)
+            .note(ToolId::Kimi)
+            .unwrap();
+        assert!(expired.contains("expired"), "{expired}");
+        assert!(expired.contains("4d"), "{expired}");
+        assert!(expired.contains("run kimi"), "{expired}");
+
+        let missing = super::Credentials::Missing.note(ToolId::Claude).unwrap();
+        assert!(missing.contains("no Claude Code credentials"), "{missing}");
+        assert!(missing.contains("run claude"), "{missing}");
+    }
+
+    #[test]
     fn a_cache_written_by_another_version_is_refetched_not_reused() {
         let dir = std::path::PathBuf::from(".tmp/fixtures");
         std::fs::create_dir_all(&dir).unwrap();
@@ -325,6 +379,7 @@ mod tests {
             captured_at: 1,
             source: "stale".to_string(),
             note: None,
+            stale_credentials: false,
         };
         store
             .meta_set("k_cache", &serde_json::to_string(&stale).unwrap())
@@ -341,6 +396,7 @@ mod tests {
             captured_at: 2,
             source: source.to_string(),
             note: None,
+            stale_credentials: false,
         };
         let got = super::cached_probe(&store, "k_last", "k_cache", || Some(fresh("fresh")));
         assert_eq!(got.unwrap().source, "fresh");

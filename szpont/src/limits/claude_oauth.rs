@@ -2,7 +2,7 @@ use serde::Deserialize;
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
-use super::{ToolLimits, WindowUsage};
+use super::{Credentials, ToolLimits, WindowUsage};
 use crate::core::{ToolId, now_ms};
 use crate::store::Store;
 
@@ -36,10 +36,33 @@ struct OauthEntry {
 }
 
 fn access_token() -> Option<String> {
-    keychain_access_token().or_else(file_access_token)
+    let oauth = oauth_entry()?;
+    if oauth.expires_at.is_some_and(|exp| exp <= now_ms()) {
+        return None;
+    }
+    oauth.access_token
 }
 
-fn keychain_access_token() -> Option<String> {
+pub(crate) fn credentials_state() -> Credentials {
+    let Some(oauth) = oauth_entry() else {
+        return Credentials::Missing;
+    };
+    if oauth.access_token.is_none_or(|t| t.is_empty()) {
+        return Credentials::Missing;
+    }
+    match oauth.expires_at {
+        Some(exp) if exp <= now_ms() => Credentials::Expired(exp),
+        _ => Credentials::Valid,
+    }
+}
+
+fn oauth_entry() -> Option<OauthEntry> {
+    let text = keychain_credentials().or_else(file_credentials)?;
+    let creds: KeychainCredentials = serde_json::from_str(text.trim()).ok()?;
+    creds.claude_ai_oauth
+}
+
+fn keychain_credentials() -> Option<String> {
     use std::io::Read;
     let security = crate::adapters::system_program(&["/usr/bin/security"], "security");
     let mut child = std::process::Command::new(security)
@@ -80,25 +103,15 @@ fn keychain_access_token() -> Option<String> {
         .take(crate::core::MAX_CREDENTIALS_BYTES)
         .read_to_string(&mut text)
         .ok()?;
-    token_from_credentials(&text)
+    Some(text)
 }
 
-fn file_access_token() -> Option<String> {
+fn file_credentials() -> Option<String> {
     let root = ToolId::Claude.home()?;
-    let text = crate::core::read_to_string_capped(
+    crate::core::read_to_string_capped(
         &root.join(".credentials.json"),
         crate::core::MAX_CREDENTIALS_BYTES,
-    )?;
-    token_from_credentials(&text)
-}
-
-fn token_from_credentials(text: &str) -> Option<String> {
-    let creds: KeychainCredentials = serde_json::from_str(text.trim()).ok()?;
-    let oauth = creds.claude_ai_oauth?;
-    if oauth.expires_at.is_some_and(|exp| exp <= now_ms()) {
-        return None;
-    }
-    oauth.access_token
+    )
 }
 
 fn fetch_usage(token: &str) -> Option<String> {
@@ -213,6 +226,7 @@ fn parse_response(body: &str, captured_at: i64) -> Option<ToolLimits> {
         captured_at,
         source: "oauth".to_string(),
         note: None,
+        stale_credentials: false,
     })
 }
 

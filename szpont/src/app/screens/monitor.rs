@@ -67,10 +67,13 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         ])
         .areas(info_area);
         frame.render_widget(
-            Paragraph::new(Span::styled(
-                " szpont machen",
-                Style::new().fg(Color::Yellow).bold(),
-            )),
+            Paragraph::new(Line::from(vec![
+                Span::styled(" szpont machen", Style::new().fg(Color::Yellow).bold()),
+                Span::styled(
+                    format!(" v{}", env!("CARGO_PKG_VERSION")),
+                    Style::new().fg(Color::DarkGray),
+                ),
+            ])),
             title_line,
         );
         frame.render_widget(
@@ -292,10 +295,12 @@ fn draw_limits_popup(frame: &mut Frame, app: &App) {
             lines.push(Line::from(spans));
         }
         if let Some(note) = &tool.note {
-            lines.push(Line::from(Span::styled(
-                format!("  {note}"),
-                Style::new().fg(Color::DarkGray),
-            )));
+            let style = if tool.stale_credentials {
+                Style::new().fg(Color::Yellow)
+            } else {
+                Style::new().fg(Color::DarkGray)
+            };
+            lines.push(Line::from(Span::styled(format!("  {note}"), style)));
         }
         lines.push(Line::from(""));
     }
@@ -376,6 +381,10 @@ fn header_line(app: &App, with_logo: bool) -> Line<'static> {
     let mut spans = Vec::new();
     if with_logo {
         spans.push(crate::app::widgets::logo::compact());
+        spans.push(Span::styled(
+            format!(" v{}", env!("CARGO_PKG_VERSION")),
+            Style::new().fg(Color::DarkGray),
+        ));
         spans.push(Span::raw("  "));
     } else {
         spans.push(Span::raw(" "));
@@ -458,7 +467,16 @@ fn limits_spans(app: &App) -> Vec<Span<'static>> {
             format!("{} ", tool.tool.as_str()),
             Style::new().fg(Color::DarkGray).bold(),
         ));
-        if tool.windows.is_empty() {
+        if tool.stale_credentials {
+            spans.push(Span::styled(
+                "⚠ sign-in expired",
+                Style::new().fg(Color::Yellow).bold(),
+            ));
+            if tool.windows.is_empty() {
+                continue;
+            }
+            spans.push(Span::raw("  "));
+        } else if tool.windows.is_empty() {
             spans.push(Span::styled("—", Style::new().fg(Color::DarkGray)));
             continue;
         }
@@ -1150,6 +1168,7 @@ mod tests {
             captured_at: now_ms(),
             source: "test".to_string(),
             note: None,
+            stale_credentials: false,
         }];
         app
     }
@@ -1192,6 +1211,23 @@ mod tests {
                 rows[limits_row].contains('↻'),
                 "no reset countdown at {width}x{height}: {:?}",
                 rows[limits_row]
+            );
+        }
+    }
+
+    #[test]
+    fn the_version_shows_next_to_the_title_in_both_header_modes() {
+        let want = format!("v{}", env!("CARGO_PKG_VERSION"));
+        for (width, height) in [(120, 30), (100, 18)] {
+            let mut app = app_with_limits(&format!("ver-{width}"), 3600);
+            let rows = rendered_rows(&mut app, width, height);
+            let title_row = rows
+                .iter()
+                .find(|line| line.contains("szpont machen"))
+                .unwrap_or_else(|| panic!("no title row at {width}x{height}: {rows:#?}"));
+            assert!(
+                title_row.contains(&want),
+                "no {want} beside the title at {width}x{height}: {title_row:?}"
             );
         }
     }
