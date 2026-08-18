@@ -16,7 +16,7 @@ use crossterm::terminal::{
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 
-use super::{Action, App, AppEvent, screens};
+use super::{Action, App, AppEvent, Screen, screens};
 use crate::cli::Cli;
 use crate::core::LaunchSpec;
 use crate::scanner::{self, ScannerHandle};
@@ -29,7 +29,7 @@ pub fn run(cli: &Cli) -> anyhow::Result<()> {
         .map(crate::allowlist::SessionAllowlist::load)
         .transpose()?;
     let store = Store::open(cli.db.as_deref())?;
-    let (repo, repo_forced) = resolve_repo_context(cli);
+    let start = resolve_repo_context(cli);
     let (event_tx, event_rx) = channel();
     let scanner = scanner::spawn(
         cli.db.clone(),
@@ -40,7 +40,11 @@ pub fn run(cli: &Cli) -> anyhow::Result<()> {
     );
     install_panic_hook();
     let mut terminal = setup_terminal()?;
-    let mut app = App::new(store, repo, repo_forced);
+    let mut app = App::new(store, start.ctx, start.forced);
+    if start.global {
+        app.screen = Screen::Monitor;
+        app.prev_screen = Screen::Monitor;
+    }
     if let Some(allowlist) = &allowlist {
         app.allowlist_mode = true;
         app.limits_disabled = true;
@@ -55,18 +59,34 @@ pub fn run(cli: &Cli) -> anyhow::Result<()> {
     result
 }
 
-fn resolve_repo_context(cli: &Cli) -> (Option<crate::core::repo::RepoContext>, bool) {
-    if cli.global {
-        return (None, false);
-    }
+struct RepoStart {
+    ctx: Option<crate::core::repo::RepoContext>,
+    forced: bool,
+    global: bool,
+}
+
+fn resolve_repo_context(cli: &Cli) -> RepoStart {
     if let Some(path) = &cli.repo {
         let ctx = crate::core::repo::detect(path)
             .unwrap_or_else(|| crate::core::repo::plain_directory_context(path));
-        return (Some(ctx), true);
+        return RepoStart {
+            ctx: Some(ctx),
+            forced: true,
+            global: false,
+        };
     }
     let cwd = std::env::current_dir().ok();
-    let ctx = cwd.as_deref().and_then(crate::core::repo::detect);
-    (ctx, false)
+    let detected = cwd.as_deref().and_then(crate::core::repo::detect);
+    let in_repo = detected.is_some();
+    let ctx = detected.or_else(|| {
+        cwd.as_deref()
+            .map(crate::core::repo::plain_directory_context)
+    });
+    RepoStart {
+        ctx,
+        forced: false,
+        global: cli.global || !in_repo,
+    }
 }
 
 fn event_loop(

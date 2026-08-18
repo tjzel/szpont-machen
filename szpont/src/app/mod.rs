@@ -57,6 +57,7 @@ pub enum Marking {
 }
 
 const MAX_EDITOR_CHARS: usize = 512;
+const MAX_PROJECT_CHARS: usize = 32;
 
 pub struct LineEditor {
     pub buffer: String,
@@ -208,6 +209,11 @@ pub struct RenameInput {
     pub editor: LineEditor,
 }
 
+pub struct ProjectInput {
+    pub dir: PathBuf,
+    pub editor: LineEditor,
+}
+
 pub struct App {
     pub rows: Vec<SessionRow>,
     pub limits: Vec<crate::limits::ToolLimits>,
@@ -217,6 +223,8 @@ pub struct App {
     pub filter_input: Option<LineEditor>,
     pub window_input: Option<WindowInput>,
     pub rename_input: Option<RenameInput>,
+    pub project_input: Option<ProjectInput>,
+    pub scope_project: Option<String>,
     pub tool_filter: Option<ToolId>,
     pub screen: Screen,
     pub prev_screen: Screen,
@@ -249,6 +257,12 @@ impl App {
         } else {
             Screen::Monitor
         };
+        let scope_project = repo.as_ref().and_then(|ctx| {
+            store
+                .project_dirs()
+                .ok()
+                .and_then(|dirs| crate::core::snapshot::project_for(&dirs, &ctx.root))
+        });
         App {
             rows: Vec::new(),
             limits: Vec::new(),
@@ -258,6 +272,8 @@ impl App {
             filter_input: None,
             window_input: None,
             rename_input: None,
+            project_input: None,
+            scope_project,
             tool_filter: None,
             screen,
             prev_screen: screen,
@@ -317,7 +333,10 @@ impl App {
             _ => !r.completed,
         };
         let repo_ok = match (self.screen, &self.repo) {
-            (Screen::Repo, Some(ctx)) => ctx.matches(r),
+            (Screen::Repo, Some(ctx)) => match &self.scope_project {
+                Some(project) => r.project.as_deref() == Some(project.as_str()),
+                None => ctx.matches(r),
+            },
             _ => true,
         };
         let tool_ok = self
@@ -478,6 +497,9 @@ impl App {
         if self.rename_input.is_some() {
             return self.handle_rename_key(key);
         }
+        if self.project_input.is_some() {
+            return self.handle_project_key(key);
+        }
         if self.pending.is_some() {
             return self.handle_pending_key(key);
         }
@@ -553,6 +575,21 @@ impl App {
                 self.toggle_archive();
                 Action::None
             }
+            KeyCode::Char('s') => {
+                let Some(row) = self.selected_row() else {
+                    return Action::None;
+                };
+                let Some(dir) = row.session.cwd.clone() else {
+                    self.status = Some("this session has no directory to assign".to_string());
+                    return Action::None;
+                };
+                let current = row.project.clone().unwrap_or_default();
+                self.project_input = Some(ProjectInput {
+                    dir,
+                    editor: LineEditor::new(current),
+                });
+                Action::None
+            }
             KeyCode::Char('u') => {
                 if self.screen == Screen::Archive || self.tree_of_archive() {
                     self.unmark_selected();
@@ -619,8 +656,10 @@ impl App {
                         self.remember_selection();
                     }
                     Screen::Monitor => {
-                        self.status =
-                            Some("not inside a repo — local scope unavailable".to_string());
+                        self.status = Some(
+                            "szpont could not read its working directory — local scope unavailable"
+                                .to_string(),
+                        );
                     }
                     _ => {}
                 }
@@ -859,6 +898,59 @@ impl App {
             }
             _ => Action::None,
         }
+    }
+
+    fn handle_project_key(&mut self, key: KeyEvent) -> Action {
+        let Some(mut input) = self.project_input.take() else {
+            return Action::None;
+        };
+        match key.code {
+            KeyCode::Enter => {
+                let name =
+                    crate::core::clean_text_fact(input.editor.buffer.trim(), MAX_PROJECT_CHARS);
+                let result = if name.is_empty() {
+                    self.store.clear_project_dir(&input.dir)
+                } else {
+                    self.store.set_project_dir(&input.dir, &name)
+                };
+                match result {
+                    Ok(()) => {
+                        let assigned = (!name.is_empty()).then(|| name.clone());
+                        for row in self.rows.iter_mut().filter(|r| {
+                            r.session
+                                .cwd
+                                .as_deref()
+                                .is_some_and(|cwd| cwd.starts_with(&input.dir))
+                        }) {
+                            row.project.clone_from(&assigned);
+                        }
+                        self.refresh_scope_project();
+                        self.status = Some(if name.is_empty() {
+                            format!("project cleared for {}", input.dir.display())
+                        } else {
+                            format!("{} assigned to project {name}", input.dir.display())
+                        });
+                    }
+                    Err(err) => self.status = Some(format!("error: {err:#}")),
+                }
+                Action::Refresh
+            }
+            KeyCode::Esc => Action::None,
+            _ => {
+                input.editor.handle(key);
+                self.project_input = Some(input);
+                Action::None
+            }
+        }
+    }
+
+    fn refresh_scope_project(&mut self) {
+        self.scope_project = self.repo.as_ref().and_then(|ctx| {
+            self.store
+                .project_dirs()
+                .ok()
+                .and_then(|dirs| crate::core::snapshot::project_for(&dirs, &ctx.root))
+        });
     }
 
     fn handle_rename_key(&mut self, key: KeyEvent) -> Action {
@@ -1184,6 +1276,7 @@ mod tests {
     fn fake_row(id: &str) -> SessionRow {
         SessionRow {
             project_alias: None,
+            project: None,
             demo_archived: false,
             session: SessionSummary {
                 key: SessionKey {
@@ -1232,6 +1325,7 @@ mod tests {
             name: "repo".to_string(),
             worktree_roots: Vec::new(),
             origin_url: None,
+            is_git: true,
         }
     }
 
@@ -1740,6 +1834,83 @@ mod tests {
         assert_eq!(
             row_tree_components(&app.rows[0]),
             vec!["~", "demo", "project"]
+        );
+    }
+
+    #[test]
+    fn assigning_a_project_persists_and_labels_every_matching_row() {
+        let mut app = test_app("project-assign");
+        let dir = std::path::PathBuf::from("/tmp/alpha");
+        app.rows = vec![fake_row("a"), fake_row("b")];
+        app.rows[0].session.cwd = Some(dir.join("child"));
+        app.rows[1].session.cwd = Some(std::path::PathBuf::from("/tmp/other"));
+        app.selected = 0;
+        app.remember_selection();
+
+        app.handle_key(key(KeyCode::Char('s')));
+        assert!(
+            app.project_input.is_some(),
+            "s did not open the project prompt"
+        );
+        for c in "dboard".chars() {
+            app.handle_key(key(KeyCode::Char(c)));
+        }
+        app.handle_key(key(KeyCode::Enter));
+
+        assert!(
+            app.project_input.is_none(),
+            "prompt stayed open after enter"
+        );
+        assert_eq!(app.rows[0].project.as_deref(), Some("dboard"));
+        assert_eq!(app.rows[1].project, None, "unrelated row was labelled");
+        let stored = app.store.project_dirs().unwrap();
+        assert_eq!(stored.len(), 1);
+        assert_eq!(stored[0].1, "dboard");
+    }
+
+    #[test]
+    fn two_directories_can_share_one_project_and_scope_prefers_it() {
+        let mut app = test_app("project-scope");
+        let alpha = std::path::PathBuf::from("/tmp/alpha");
+        let beta = std::path::PathBuf::from("/tmp/beta");
+        app.store.set_project_dir(&alpha, "dboard").unwrap();
+        app.store.set_project_dir(&beta, "dboard").unwrap();
+
+        let dirs = app.store.project_dirs().unwrap();
+        assert_eq!(
+            crate::core::snapshot::project_for(&dirs, &alpha.join("deep/child")).as_deref(),
+            Some("dboard")
+        );
+        assert_eq!(
+            crate::core::snapshot::project_for(&dirs, &beta).as_deref(),
+            Some("dboard")
+        );
+        assert_eq!(
+            crate::core::snapshot::project_for(&dirs, std::path::Path::new("/tmp/gamma")),
+            None
+        );
+
+        app.repo = Some(crate::core::repo::plain_directory_context(&alpha));
+        app.refresh_scope_project();
+        assert_eq!(app.scope_project.as_deref(), Some("dboard"));
+
+        app.rows = vec![fake_row("a"), fake_row("b"), fake_row("c")];
+        app.rows[0].session.cwd = Some(alpha.clone());
+        app.rows[0].project = Some("dboard".to_string());
+        app.rows[1].session.cwd = Some(beta.clone());
+        app.rows[1].project = Some("dboard".to_string());
+        app.rows[2].session.cwd = Some(std::path::PathBuf::from("/tmp/gamma"));
+        app.screen = Screen::Repo;
+
+        let visible = app.visible_indices();
+        assert_eq!(
+            visible.len(),
+            2,
+            "project scope must span every directory in the project"
+        );
+        assert!(
+            !visible.contains(&2),
+            "unrelated directory leaked into scope"
         );
     }
 }

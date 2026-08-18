@@ -12,10 +12,31 @@ use crate::core::{Liveness, format_age, format_tokens, now_ms, truncate};
 
 const POPUP_WIDTH: u16 = 72;
 const PICKER_WIDTH: u16 = 44;
-const REPO_WIDTH: u16 = 68;
-const FLAT_FIXED_COLUMNS: [u16; 7] = [5, 1, 7, 7, REPO_WIDTH, 9, 20];
+const MIN_FLEX_WIDTH: u16 = 12;
+const PROJECT_WIDTH: u16 = 14;
+const FLAT_FIXED_COLUMNS: [u16; 7] = [5, 1, 7, 7, PROJECT_WIDTH, 9, 20];
 const ARCHIVE_EXTRA_COLUMN: u16 = 16;
 const TREE_FIXED_COLUMNS: [u16; 6] = [1, 7, 7, 9, 20, 5];
+
+fn split_flex_width(area_width: u16, archive: bool, longest_title: usize) -> (usize, usize) {
+    let fixed: u16 =
+        FLAT_FIXED_COLUMNS.iter().sum::<u16>() + if archive { ARCHIVE_EXTRA_COLUMN } else { 0 };
+    let columns = FLAT_FIXED_COLUMNS.len() as u16 + 2 + u16::from(archive);
+    let flex = area_width.saturating_sub(fixed + columns.saturating_sub(1));
+    let share = (flex / 2).max(MIN_FLEX_WIDTH);
+    let wanted = u16::try_from(longest_title).unwrap_or(u16::MAX);
+    let title = wanted.clamp(MIN_FLEX_WIDTH.min(share), share);
+    let repo = flex.saturating_sub(title).max(MIN_FLEX_WIDTH);
+    (title as usize, repo as usize)
+}
+
+fn row_title(row: &SessionRow) -> &str {
+    row.session
+        .title
+        .as_deref()
+        .or(row.session.preview.as_deref())
+        .unwrap_or("-")
+}
 
 fn fixed_table_width(columns: &[u16], extra: Option<u16>) -> u16 {
     let base: u16 = columns.iter().sum();
@@ -374,7 +395,11 @@ fn header_line(app: &App, with_logo: bool) -> Line<'static> {
             (Screen::Archive, _) => "archive".to_string(),
             (Screen::Tree, _) if app.tree_of_archive() => "archive by location".to_string(),
             (Screen::Tree, _) => "by location".to_string(),
-            (Screen::Repo, Some(ctx)) => format!("repo: {}", ctx.name),
+            (Screen::Repo, _) if app.scope_project.is_some() => {
+                format!("project: {}", app.scope_project.clone().unwrap_or_default())
+            }
+            (Screen::Repo, Some(ctx)) if ctx.is_git => format!("repo: {}", ctx.name),
+            (Screen::Repo, Some(ctx)) => format!("dir: {}", ctx.name),
             _ => "all repos".to_string(),
         }
     };
@@ -390,7 +415,15 @@ fn header_line(app: &App, with_logo: bool) -> Line<'static> {
         spans.push(Span::raw(" "));
     }
     spans.extend([
-        Span::styled(scope, Style::new().fg(Color::Magenta).bold()),
+        Span::styled(
+            scope,
+            Style::new()
+                .fg(app
+                    .scope_project
+                    .as_deref()
+                    .map_or(Color::Magenta, project_color))
+                .bold(),
+        ),
         Span::raw("   "),
         Span::styled(format!("{running} RUNNING"), Style::new().fg(Color::Green)),
         Span::raw("   "),
@@ -809,9 +842,12 @@ fn draw_table(frame: &mut Frame, app: &mut App, area: Rect) {
     }
     let now = now_ms();
     let archive = app.screen == Screen::Archive;
-    let extra = archive.then_some(ARCHIVE_EXTRA_COLUMN);
-    let fixed_width = fixed_table_width(&FLAT_FIXED_COLUMNS, extra);
-    let title_width = area.width.saturating_sub(fixed_width).max(10) as usize;
+    let longest_title = visible
+        .iter()
+        .map(|&i| row_title(&app.rows[i]).chars().count())
+        .max()
+        .unwrap_or(0);
+    let (title_width, repo_width) = split_flex_width(area.width, archive, longest_title);
     let rows: Vec<Row> = visible
         .iter()
         .map(|&i| {
@@ -822,6 +858,7 @@ fn draw_table(frame: &mut Frame, app: &mut App, area: Rect) {
                 archive,
                 app.marked.contains(&row.session.key),
                 title_width,
+                repo_width,
             )
         })
         .collect();
@@ -830,13 +867,14 @@ fn draw_table(frame: &mut Frame, app: &mut App, area: Rect) {
         Constraint::Length(FLAT_FIXED_COLUMNS[1]),
         Constraint::Length(FLAT_FIXED_COLUMNS[2]),
         Constraint::Length(FLAT_FIXED_COLUMNS[3]),
-        Constraint::Min(24),
         Constraint::Length(FLAT_FIXED_COLUMNS[4]),
+        Constraint::Length(title_width as u16),
+        Constraint::Length(repo_width as u16),
         Constraint::Length(FLAT_FIXED_COLUMNS[5]),
         Constraint::Length(FLAT_FIXED_COLUMNS[6]),
     ];
     let mut header = vec![
-        "LAST", "", "STATUS", "TOOL", "TITLE", "REPO", "TOKENS", "CTX",
+        "LAST", "", "STATUS", "TOOL", "PROJECT", "TITLE", "REPO", "TOKENS", "CTX",
     ];
     if archive {
         widths.push(Constraint::Length(ARCHIVE_EXTRA_COLUMN));
@@ -864,18 +902,14 @@ fn session_row(
     archive: bool,
     marked: bool,
     title_width: usize,
+    repo_width: usize,
 ) -> Row<'static> {
     let (status_label, status_style) = if archive {
         ("", Style::new())
     } else {
         liveness_label(row.liveness)
     };
-    let title = row
-        .session
-        .title
-        .as_deref()
-        .or(row.session.preview.as_deref())
-        .unwrap_or("-");
+    let title = row_title(row);
     let base = if archive {
         Style::new()
     } else {
@@ -892,8 +926,9 @@ fn session_row(
         Cell::from(status_label).style(status_style),
         Cell::from(row.session.key.tool.as_str())
             .style(Style::new().fg(tool_color(row.session.key.tool))),
+        project_cell(row.project.as_deref()),
         Cell::from(truncate(title, title_width)),
-        Cell::from(repo_label(row)),
+        Cell::from(repo_label(row, repo_width)),
         Cell::from(
             row.tokens_total()
                 .map_or_else(|| "-".to_string(), format_tokens),
@@ -909,6 +944,24 @@ fn session_row(
         cells.push(Cell::from(completed));
     }
     Row::new(cells).style(base)
+}
+
+fn project_cell(project: Option<&str>) -> Cell<'static> {
+    match project.filter(|name| !name.is_empty()) {
+        Some(name) => Cell::from(truncate(name, PROJECT_WIDTH as usize))
+            .style(Style::new().fg(project_color(name))),
+        None => Cell::from(""),
+    }
+}
+
+fn project_color(name: &str) -> Color {
+    const PALETTE: [u8; 10] = [39, 42, 214, 170, 45, 178, 204, 76, 110, 173];
+    let mut hash: u32 = 2_166_136_261;
+    for byte in name.as_bytes() {
+        hash ^= u32::from(*byte);
+        hash = hash.wrapping_mul(16_777_619);
+    }
+    Color::Indexed(PALETTE[(hash % 10) as usize])
 }
 
 fn tool_color(tool: crate::core::ToolId) -> Color {
@@ -961,6 +1014,17 @@ fn footer_line(app: &App) -> Line<'static> {
         spans.extend(input.editor.cursor_spans(status_style));
         spans.push(Span::raw("   "));
         spans.extend(hint_spans(&[("enter", "save"), ("esc", "cancel")]));
+    } else if let Some(input) = &app.project_input {
+        spans.push(Span::styled(
+            format!(
+                "project for {}: ",
+                crate::core::truncate(&input.dir.display().to_string(), 40)
+            ),
+            status_style,
+        ));
+        spans.extend(input.editor.cursor_spans(status_style));
+        spans.push(Span::raw("   "));
+        spans.extend(hint_spans(&[("enter", "save"), ("esc", "cancel")]));
     } else if let Some(mode) = app.marking {
         match mode {
             crate::app::Marking::Complete => {
@@ -1006,6 +1070,7 @@ fn footer_line(app: &App) -> Line<'static> {
                 ("u", "reopen"),
                 ("d", "mark for deletion"),
                 ("m", "rename"),
+                ("s", "set project"),
                 ("v", tree),
                 ("esc", "back"),
                 ("ctrl+c", "quit"),
@@ -1092,9 +1157,9 @@ fn hint_spans<'a>(hints: &'a [(&'a str, &'a str)]) -> Vec<Span<'static>> {
     spans
 }
 
-fn repo_label(row: &SessionRow) -> String {
+fn repo_label(row: &SessionRow, max: usize) -> String {
     if let Some(alias) = row.project_label() {
-        return truncate_left(&alias, REPO_WIDTH as usize);
+        return truncate_left(&alias, max);
     }
     let Some(cwd) = row.session.cwd.as_deref() else {
         return "?".to_string();
@@ -1108,7 +1173,7 @@ fn repo_label(row: &SessionRow) -> String {
         Some(rest) => format!("~/{}", rest.display()),
         None => cwd.display().to_string(),
     };
-    truncate_left(&text, REPO_WIDTH as usize)
+    truncate_left(&text, max)
 }
 
 fn truncate_left(s: &str, max: usize) -> String {
@@ -1230,5 +1295,141 @@ mod tests {
                 "no {want} beside the title at {width}x{height}: {title_row:?}"
             );
         }
+    }
+
+    fn app_with_session(name: &str, title: &str, cwd: &str) -> App {
+        let dir = std::path::PathBuf::from(".tmp/fixtures");
+        std::fs::create_dir_all(&dir).unwrap();
+        let db = dir.join(format!("screen-{name}.db"));
+        let _ = std::fs::remove_file(&db);
+        let store = crate::store::Store::open(Some(&db)).unwrap();
+        let mut app = App::new(store, None, false);
+        app.received_first_snapshot = true;
+        app.rows = vec![crate::core::snapshot::SessionRow {
+            project_alias: None,
+            project: None,
+            demo_archived: false,
+            session: crate::core::SessionSummary {
+                key: crate::core::SessionKey {
+                    tool: crate::core::ToolId::Claude,
+                    id: "s1".to_string(),
+                },
+                cwd: Some(std::path::PathBuf::from(cwd)),
+                title: Some(title.to_string()),
+                preview: None,
+                model: None,
+                updated_at_ms: now_ms(),
+                native_tokens_used: None,
+                native_archived: false,
+                usage_files: Vec::new(),
+                created_at_ms: None,
+                origin_url: None,
+            },
+            liveness: Liveness::Idle,
+            completed: false,
+            completed_at: None,
+            usage: None,
+            context_tokens: None,
+            context_window: None,
+        }];
+        app
+    }
+
+    #[test]
+    fn title_and_repo_share_the_leftover_width_evenly_when_both_want_it() {
+        let title = "a session title so long that it wants more room than half of the leftover space could ever give it";
+        let cwd = "/Users/someone/projects/deeply/nested/checkout/of/a/repository";
+        for width in [120u16, 150, 200] {
+            let mut app = app_with_session(&format!("width-{width}"), title, cwd);
+            let (title_span, repo_span) = column_spans(&mut app, width);
+            assert!(
+                title_span.abs_diff(repo_span) <= 1,
+                "columns not evenly split at {width}: title {title_span}, repo {repo_span}"
+            );
+        }
+    }
+
+    fn column_spans(app: &mut App, width: u16) -> (usize, usize) {
+        let rows = rendered_rows(app, width, 12);
+        let header = rows
+            .iter()
+            .find(|line| line.contains("TITLE") && line.contains("REPO"))
+            .unwrap_or_else(|| panic!("no header at {width}"));
+        let title_col = header.find("TITLE").unwrap();
+        let repo_col = header.find("REPO").unwrap();
+        let tokens_col = header.find("TOKENS").unwrap();
+        (repo_col - title_col, tokens_col - repo_col)
+    }
+
+    #[test]
+    fn the_title_column_shrinks_to_the_longest_title_and_repo_takes_the_slack() {
+        let cwd = "/Users/someone/projects/deeply/nested/checkout/of/a/repository";
+        let mut short = app_with_session("fit-short", "tiny title", cwd);
+        let (short_title, short_repo) = column_spans(&mut short, 150);
+
+        let long = "a distinctive session title that is really quite long indeed";
+        let mut wide = app_with_session("fit-long", long, cwd);
+        let (long_title, long_repo) = column_spans(&mut wide, 150);
+
+        assert!(
+            short_title < long_title,
+            "short title did not shrink its column: {short_title} vs {long_title}"
+        );
+        assert!(
+            short_repo > long_repo,
+            "repo did not take the slack: {short_repo} vs {long_repo}"
+        );
+        assert!(
+            short_title >= "tiny title".len(),
+            "title column narrower than the title itself: {short_title}"
+        );
+    }
+
+    #[test]
+    fn a_short_title_does_not_reserve_width_it_cannot_use() {
+        let cwd = "/Users/someone/projects/deeply/nested/checkout/of/a/repository";
+        let mut app = app_with_session("short-title", "hi", cwd);
+        let rows = rendered_rows(&mut app, 150, 12).join("\n");
+        assert!(
+            rows.contains("repository"),
+            "repo tail should fit beside a short title:\n{rows}"
+        );
+    }
+
+    #[test]
+    fn project_colors_are_stable_and_spread_across_the_palette() {
+        let names = [
+            "dboard",
+            "reanimated",
+            "szpont",
+            "vscode",
+            "worklets",
+            "analysis",
+            "hud",
+            "canbus",
+        ];
+        for name in names {
+            assert_eq!(
+                super::project_color(name),
+                super::project_color(name),
+                "{name} changed colour between calls"
+            );
+        }
+        let distinct: std::collections::HashSet<_> =
+            names.iter().map(|n| super::project_color(n)).collect();
+        assert!(
+            distinct.len() >= names.len() - 2,
+            "palette collapsed: {} colours for {} names",
+            distinct.len(),
+            names.len()
+        );
+        assert_ne!(super::project_color("alpha"), super::project_color("beta"));
+    }
+
+    #[test]
+    fn a_project_name_keeps_its_colour_across_versions() {
+        assert_eq!(super::project_color("dboard"), Color::Indexed(170));
+        assert_eq!(super::project_color("szpont"), Color::Indexed(76));
+        assert_eq!(super::project_color("reanimated"), Color::Indexed(178));
     }
 }

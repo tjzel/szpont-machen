@@ -9,6 +9,7 @@ pub struct RepoContext {
     pub name: String,
     pub worktree_roots: Vec<PathBuf>,
     pub origin_url: Option<String>,
+    pub is_git: bool,
 }
 
 pub fn detect(start: &Path) -> Option<RepoContext> {
@@ -23,6 +24,7 @@ pub fn detect(start: &Path) -> Option<RepoContext> {
         origin_url: origin_url(&root).map(|u| normalize_origin(&u)),
         root,
         name,
+        is_git: true,
     })
 }
 
@@ -36,6 +38,7 @@ pub fn plain_directory_context(path: &Path) -> RepoContext {
         worktree_roots: Vec::new(),
         origin_url: None,
         root,
+        is_git: false,
     }
 }
 
@@ -140,6 +143,47 @@ mod tests {
         assert_eq!(
             normalize_origin("ssh://user@host.xz/org/repo"),
             "host.xz/org/repo"
+        );
+    }
+
+    #[test]
+    fn a_directory_without_git_still_yields_a_scopeable_context() {
+        let dir = std::path::PathBuf::from(".tmp/fixtures/umbrella/child");
+        std::fs::create_dir_all(&dir).unwrap();
+        let umbrella = dir.parent().unwrap();
+        let ctx = super::plain_directory_context(umbrella);
+        assert!(!ctx.is_git);
+        assert_eq!(ctx.name, "umbrella");
+        let row = crate::core::snapshot::SessionRow {
+            project_alias: None,
+            project: None,
+            demo_archived: false,
+            session: crate::core::SessionSummary {
+                key: crate::core::SessionKey {
+                    tool: crate::core::ToolId::Claude,
+                    id: "s1".to_string(),
+                },
+                cwd: Some(dir.canonicalize().unwrap()),
+                title: None,
+                preview: None,
+                model: None,
+                updated_at_ms: 0,
+                native_tokens_used: None,
+                native_archived: false,
+                usage_files: Vec::new(),
+                created_at_ms: None,
+                origin_url: None,
+            },
+            liveness: crate::core::Liveness::Idle,
+            completed: false,
+            completed_at: None,
+            usage: None,
+            context_tokens: None,
+            context_window: None,
+        };
+        assert!(
+            ctx.matches(&row),
+            "a session in a child directory must fall inside the umbrella scope"
         );
     }
 }

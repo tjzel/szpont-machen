@@ -9,6 +9,7 @@ use crate::store::{Store, StoredMeta};
 pub struct SessionRow {
     pub session: SessionSummary,
     pub project_alias: Option<String>,
+    pub project: Option<String>,
     pub demo_archived: bool,
     pub liveness: Liveness,
     pub completed: bool,
@@ -32,6 +33,12 @@ impl SessionRow {
     pub fn project_label(&self) -> Option<String> {
         self.project_alias().map(format_project_alias)
     }
+}
+
+pub fn project_for(dirs: &[(PathBuf, String)], cwd: &Path) -> Option<String> {
+    dirs.iter()
+        .find(|(dir, _)| cwd.starts_with(dir))
+        .map(|(_, name)| name.clone())
 }
 
 pub fn format_project_alias(alias: &str) -> String {
@@ -71,6 +78,7 @@ pub fn collect_sessions_with(
 ) -> anyhow::Result<Vec<SessionRow>> {
     let meta = store.session_meta_map()?;
     let window_overrides = store.context_window_overrides()?;
+    let project_dirs = store.project_dirs()?;
     let mut ckpt = CheckpointTxn::begin(store.conn_mut())?;
     let mut rows = Vec::new();
     let mut discovered_counts: std::collections::HashMap<&'static str, usize> =
@@ -212,7 +220,12 @@ pub fn collect_sessions_with(
                 .and_then(|list| list.aliases(&session.key))
                 .is_some_and(|aliases| aliases.archived);
             let completed = demo_archived || session.native_archived || completed_at.is_some();
+            let project = session
+                .cwd
+                .as_deref()
+                .and_then(|cwd| project_for(&project_dirs, cwd));
             rows.push(SessionRow {
+                project,
                 project_alias: allowlist
                     .and_then(|list| list.aliases(&session.key))
                     .map(|aliases| aliases.project.clone()),

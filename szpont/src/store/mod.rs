@@ -186,6 +186,38 @@ impl Store {
         Ok(())
     }
 
+    pub fn project_dirs(&self) -> anyhow::Result<Vec<(PathBuf, String)>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT key, value FROM meta WHERE key LIKE 'project_dir:%'")?;
+        let rows = stmt.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?;
+        let mut dirs = Vec::new();
+        for row in rows {
+            let (key, name) = row?;
+            if let Some(dir) = key.strip_prefix("project_dir:")
+                && !name.is_empty()
+            {
+                dirs.push((PathBuf::from(dir), name));
+            }
+        }
+        dirs.sort_by_key(|(dir, _)| std::cmp::Reverse(dir.as_os_str().len()));
+        Ok(dirs)
+    }
+
+    pub fn set_project_dir(&self, dir: &Path, name: &str) -> anyhow::Result<()> {
+        self.meta_set(&format!("project_dir:{}", dir.display()), name)
+    }
+
+    pub fn clear_project_dir(&self, dir: &Path) -> anyhow::Result<()> {
+        self.conn.execute(
+            "DELETE FROM meta WHERE key = ?1",
+            params![format!("project_dir:{}", dir.display())],
+        )?;
+        Ok(())
+    }
+
     pub fn context_window_overrides(&self) -> anyhow::Result<HashMap<String, u64>> {
         let mut stmt = self
             .conn
