@@ -47,10 +47,11 @@ fn fixed_table_width(columns: &[u16], extra: Option<u16>) -> u16 {
 pub fn draw(frame: &mut Frame, app: &mut App) {
     let tall = frame.area().height >= 22 && frame.area().width >= 90;
     let width = frame.area().width.max(1) as usize;
-    let footer = footer_line(app);
-    let footer_height = wrapped_height(footer.width(), width, MAX_FOOTER_LINES);
-    let status_height = wrapped_height(header_line(app, true).width(), width, MAX_HEADER_LINES);
-    let limits_height = wrapped_height(limits_line(app).width(), width, MAX_HEADER_LINES);
+    let cap = footer_cap(frame.area().height);
+    let footer = footer_line(app, width, cap);
+    let footer_height = wrapped_height(&footer, width, cap);
+    let status_height = wrapped_height(&header_line(app, true), width, MAX_HEADER_LINES);
+    let limits_height = wrapped_height(&limits_line(app), width, MAX_HEADER_LINES);
     let header_height = if tall {
         crate::app::widgets::logo::HEIGHT
     } else {
@@ -981,15 +982,58 @@ fn liveness_label(liveness: Liveness) -> (&'static str, Style) {
     }
 }
 
-const MAX_FOOTER_LINES: u16 = 3;
+pub(super) fn footer_cap(area_height: u16) -> u16 {
+    (area_height / 2).max(1)
+}
 const MAX_HEADER_LINES: u16 = 2;
 
-fn wrapped_height(content_width: usize, area_width: usize, cap: u16) -> u16 {
-    let lines = content_width.div_ceil(area_width.max(1)).max(1);
-    (lines as u16).min(cap)
+pub(super) fn wrapped_height(line: &Line, area_width: usize, cap: u16) -> u16 {
+    wrapped_rows(&line_text(line), area_width).min(cap)
 }
 
-fn footer_line(app: &App) -> Line<'static> {
+fn line_text(line: &Line) -> String {
+    line.spans
+        .iter()
+        .map(|span| span.content.as_ref())
+        .collect()
+}
+
+fn text_width(text: &str) -> usize {
+    Span::raw(text).width()
+}
+
+fn wrapped_rows(text: &str, area_width: usize) -> u16 {
+    let width = area_width.max(1);
+    let mut rows: u16 = 1;
+    let mut used = 0usize;
+    let mut gap = 0usize;
+    for token in text.split_inclusive(char::is_whitespace) {
+        let word = token.trim_end_matches(char::is_whitespace);
+        let spacing = text_width(&token[word.len()..]);
+        if !word.is_empty() {
+            let wanted = text_width(word);
+            if used == 0 {
+                used = wanted;
+            } else if used + gap + wanted <= width {
+                used += gap + wanted;
+            } else {
+                rows = rows.saturating_add(1);
+                used = wanted;
+            }
+            gap = 0;
+            while used > width {
+                rows = rows.saturating_add(1);
+                used -= width;
+            }
+        }
+        if used > 0 {
+            gap += spacing;
+        }
+    }
+    rows
+}
+
+pub(super) fn footer_line(app: &App, width: usize, cap: u16) -> Line<'static> {
     let status_style = Style::new().fg(Color::Yellow);
     let mut spans: Vec<Span> = vec![Span::raw(" ")];
     if let Some(input) = &app.filter_input {
@@ -1000,7 +1044,6 @@ fn footer_line(app: &App) -> Line<'static> {
             format!("   {matches} match(es)   "),
             Style::new().fg(Color::DarkGray),
         ));
-        spans.extend(hint_spans(&[("enter", "keep"), ("esc", "cancel")]));
     } else if let Some(input) = &app.window_input {
         spans.push(Span::styled(
             format!("context window for {}: ", input.model),
@@ -1008,12 +1051,10 @@ fn footer_line(app: &App) -> Line<'static> {
         ));
         spans.extend(input.editor.cursor_spans(status_style));
         spans.push(Span::raw("   "));
-        spans.extend(hint_spans(&[("enter", "save"), ("esc", "cancel")]));
     } else if let Some(input) = &app.rename_input {
         spans.push(Span::styled("rename: ", status_style));
         spans.extend(input.editor.cursor_spans(status_style));
         spans.push(Span::raw("   "));
-        spans.extend(hint_spans(&[("enter", "save"), ("esc", "cancel")]));
     } else if let Some(input) = &app.project_input {
         spans.push(Span::styled(
             format!(
@@ -1024,97 +1065,154 @@ fn footer_line(app: &App) -> Line<'static> {
         ));
         spans.extend(input.editor.cursor_spans(status_style));
         spans.push(Span::raw("   "));
-        spans.extend(hint_spans(&[("enter", "save"), ("esc", "cancel")]));
-    } else if let Some(mode) = app.marking {
-        match mode {
-            crate::app::Marking::Complete => {
-                let confirm_label = format!("confirm {} marked as completed", app.marked.len());
-                spans.extend(hint_spans(&[
-                    ("c", "mark"),
-                    ("↑/↓", "move"),
-                    ("enter", confirm_label.as_str()),
-                    ("esc", "cancel"),
-                ]));
-            }
-            crate::app::Marking::Delete => {
-                let confirm_label = format!("PERMANENTLY delete {} marked", app.marked.len());
-                spans.extend(hint_spans(&[
-                    ("d", "mark"),
-                    ("↑/↓", "move"),
-                    ("enter", confirm_label.as_str()),
-                    ("esc", "cancel"),
-                ]));
-            }
+    }
+    let owned = footer_hints(app);
+    let borrowed: Vec<(&str, &str)> = owned
+        .iter()
+        .map(|(key, label)| (key.as_str(), label.as_str()))
+        .collect();
+    let hints = hint_spans(&borrowed);
+    if shows_status(app) {
+        let fitted = app
+            .status
+            .as_deref()
+            .and_then(|status| fit_status(status, &hints, width, cap));
+        if let Some(status) = fitted {
+            spans.push(Span::styled(status, status_style));
+            spans.push(Span::styled(
+                STATUS_SEPARATOR,
+                Style::new().fg(Color::DarkGray),
+            ));
         }
+    }
+    spans.extend(hints);
+    Line::from(spans)
+}
+
+fn shows_status(app: &App) -> bool {
+    app.status.is_some()
+        && !app.show_limits
+        && !app.show_detail
+        && app.filter_input.is_none()
+        && app.window_input.is_none()
+        && app.rename_input.is_none()
+        && app.project_input.is_none()
+        && app.marking.is_none()
+        && app.pending.is_none()
+}
+
+pub(super) fn footer_hints(app: &App) -> Vec<(String, String)> {
+    fn owned(pairs: &[(&str, &str)]) -> Vec<(String, String)> {
+        pairs
+            .iter()
+            .map(|(key, label)| ((*key).to_string(), (*label).to_string()))
+            .collect()
+    }
+    let mut hints = if app.show_limits || app.show_detail {
+        owned(&[("any key", "close")])
+    } else if app.filter_input.is_some() {
+        owned(&[("enter", "keep"), ("esc", "cancel")])
+    } else if app.window_input.is_some()
+        || app.rename_input.is_some()
+        || app.project_input.is_some()
+    {
+        owned(&[("enter", "save"), ("esc", "cancel")])
+    } else if let Some(mode) = app.marking {
+        let (toggle, confirm) = match mode {
+            crate::app::Marking::Complete => (
+                "c",
+                format!("confirm {} marked as completed", app.marked.len()),
+            ),
+            crate::app::Marking::Delete => (
+                "d",
+                format!("PERMANENTLY delete {} marked", app.marked.len()),
+            ),
+        };
+        let mut hints = owned(&[(toggle, "mark"), ("↑/↓", "move")]);
+        hints.push(("enter".to_string(), confirm));
+        hints.extend(owned(&[("esc/q", "cancel")]));
+        hints
     } else if let Some(Pending::NewSession { tools, .. }) = &app.pending {
-        let pick_label = if tools.len() == 1 {
+        let pick = if tools.len() == 1 {
             "1".to_string()
         } else {
             format!("1-{}", tools.len().min(9))
         };
-        spans.extend(hint_spans(&[
-            ("↑/↓", "choose"),
-            ("enter", "start"),
-            (pick_label.as_str(), "direct pick"),
-            ("esc", "cancel"),
-        ]));
+        let mut hints = owned(&[("↑/↓", "choose"), ("enter", "start")]);
+        hints.push((pick, "direct pick".to_string()));
+        hints.extend(owned(&[("esc/q", "cancel")]));
+        hints
+    } else if app.screen == Screen::Options {
+        owned(&[
+            ("↑/↓", "move"),
+            ("enter", "set context window"),
+            ("esc/o", "back"),
+        ])
     } else {
-        if let Some(status) = &app.status {
-            spans.push(Span::styled(status.clone(), status_style));
-            spans.push(Span::styled("   │   ", Style::new().fg(Color::DarkGray)));
-        }
-        let tree = app.tree_label();
-        let hints: Vec<(&str, &str)> = if app.screen == Screen::Archive {
-            vec![
-                ("enter", "resume"),
-                ("u", "reopen"),
-                ("d", "mark for deletion"),
-                ("m", "rename"),
-                ("s", "set project"),
-                ("v", tree),
-                ("esc", "back"),
-                ("ctrl+c", "quit"),
-            ]
-        } else if app.screen == Screen::Tree {
-            let complete_hint: (&str, &str) = if app.tree_of_archive() {
-                ("u", "reopen")
-            } else {
-                ("c", "mark as completed")
-            };
-            vec![
-                ("enter", "resume"),
-                complete_hint,
-                ("d", "mark for deletion"),
-                ("m", "rename"),
-                ("v", tree),
-                ("f", "find"),
-                ("esc", "back"),
-                ("ctrl+c", "quit"),
-            ]
-        } else {
-            let mut h = vec![
-                ("enter", "resume"),
-                ("c", "mark as completed"),
-                ("d", "mark for deletion"),
-                ("m", "rename"),
-                ("n", "new session"),
-                ("a", "archive"),
-                ("v", tree),
-            ];
-            if let Some(scope) = app.scope_label() {
-                h.push(("p", scope));
-            }
-            h.extend([
-                ("f", "find"),
-                ("o", "options"),
-                ("r", "refresh"),
-                ("ctrl+c", "quit"),
-            ]);
-            h
-        };
-        spans.extend(hint_spans(&hints));
+        owned(&browse_hints(app))
+    };
+    hints.extend(owned(&[("ctrl+c", "quit")]));
+    hints
+}
+
+const STATUS_SEPARATOR: &str = "   │   ";
+
+fn fit_status(status: &str, hints: &[Span<'static>], width: usize, cap: u16) -> Option<String> {
+    let tail: String = hints.iter().map(|span| span.content.as_ref()).collect();
+    let fits = |text: &str| wrapped_rows(&format!(" {text}{STATUS_SEPARATOR}{tail}"), width) <= cap;
+    if fits(status) {
+        return Some(status.to_string());
     }
-    Line::from(spans)
+    let (mut low, mut high) = (0usize, status.chars().count());
+    while low < high {
+        let mid = low.midpoint(high + 1);
+        if fits(&crate::core::truncate(status, mid)) {
+            low = mid;
+        } else {
+            high = mid - 1;
+        }
+    }
+    (low > 1).then(|| crate::core::truncate(status, low))
+}
+
+fn browse_hints(app: &App) -> Vec<(&'static str, &'static str)> {
+    let archived = app.screen == Screen::Archive || app.tree_of_archive();
+    let mut hints = vec![("enter", "resume"), ("E", "run here")];
+    hints.push(if archived {
+        ("u", "reopen")
+    } else {
+        ("c", "mark as completed")
+    });
+    hints.extend([
+        ("d", "mark for deletion"),
+        ("m", "rename"),
+        ("s", "set project"),
+        ("n", "new session"),
+    ]);
+    if app.screen != Screen::Archive {
+        hints.push(("a", "archive"));
+    }
+    hints.push(("v", app.tree_label()));
+    if let Some(scope) = app.scope_label() {
+        hints.push(("p", scope));
+    }
+    match app.screen {
+        Screen::Archive => hints.push(("esc/a", "back")),
+        Screen::Tree => hints.push(("esc", "back")),
+        _ if app.has_filters() => hints.push(("esc", "clear filters")),
+        _ => {}
+    }
+    hints.extend([
+        ("f", "find"),
+        ("i", "details"),
+        ("l", "limits"),
+        ("tab/shift+tab", "filter by tool"),
+        ("↑/↓", "move"),
+        ("home/end/G", "first/last"),
+        ("o", "options"),
+        ("r", "refresh"),
+    ]);
+    hints
 }
 
 fn hint_spans<'a>(hints: &'a [(&'a str, &'a str)]) -> Vec<Span<'static>> {
@@ -1132,7 +1230,7 @@ fn hint_spans<'a>(hints: &'a [(&'a str, &'a str)]) -> Vec<Span<'static>> {
         let mnemonic = key
             .chars()
             .next()
-            .filter(|_| key.chars().count() == 1)
+            .filter(|c| key.chars().count() == 1 && c.is_ascii_lowercase())
             .and_then(|k| {
                 label
                     .char_indices()
@@ -1207,7 +1305,12 @@ mod tests {
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
 
+    use std::path::PathBuf;
+
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
     use super::*;
+    use crate::app::Action;
     use crate::core::now_ms;
     use crate::limits::{ToolLimits, WindowUsage};
 
@@ -1249,6 +1352,578 @@ mod tests {
                     .collect::<String>()
             })
             .collect()
+    }
+
+    fn collapse(text: &str) -> String {
+        text.split_whitespace().collect::<Vec<_>>().join(" ")
+    }
+
+    fn footer_text(app: &mut App, width: u16, height: u16) -> String {
+        let rows = rendered_rows(app, width, height);
+        let separator = rows
+            .iter()
+            .rposition(|line| !line.trim().is_empty() && line.trim().chars().all(|c| c == '─'))
+            .unwrap_or_else(|| panic!("no separator row at {width}x{height}: {rows:#?}"));
+        collapse(&rows[separator + 1..].join(" "))
+    }
+
+    fn hint_text(hint: (&str, &str)) -> String {
+        collapse(
+            &hint_spans(&[hint])
+                .iter()
+                .map(|span| span.content.as_ref())
+                .collect::<String>(),
+        )
+    }
+
+    fn probe_rows() -> Vec<crate::core::snapshot::SessionRow> {
+        ["one", "two", "three"]
+            .iter()
+            .enumerate()
+            .map(|(index, name)| crate::core::snapshot::SessionRow {
+                project_alias: None,
+                project: None,
+                demo_archived: false,
+                session: crate::core::SessionSummary {
+                    key: crate::core::SessionKey {
+                        tool: crate::core::ToolId::Claude,
+                        id: format!("s{index}"),
+                    },
+                    cwd: Some(PathBuf::from(".")),
+                    title: Some(format!("session {name}")),
+                    preview: None,
+                    model: None,
+                    updated_at_ms: now_ms(),
+                    native_tokens_used: None,
+                    native_archived: false,
+                    usage_files: Vec::new(),
+                    created_at_ms: None,
+                    origin_url: None,
+                },
+                liveness: Liveness::Idle,
+                completed: index == 2,
+                completed_at: (index == 2).then_some(1),
+                usage: None,
+                context_tokens: None,
+                context_window: None,
+            })
+            .collect()
+    }
+
+    fn browse_app(name: &str, screen: Screen, prev: Screen, repo: bool) -> App {
+        let ctx = repo.then(|| crate::core::repo::plain_directory_context(&PathBuf::from(".")));
+        let dir = PathBuf::from(".tmp/fixtures");
+        std::fs::create_dir_all(&dir).unwrap();
+        let db = dir.join(format!("hints-{name}.db"));
+        let _ = std::fs::remove_file(&db);
+        let store = crate::store::Store::open(Some(&db)).unwrap();
+        let mut app = App::new(store, ctx, false);
+        app.received_first_snapshot = true;
+        app.rows = probe_rows();
+        app.prev_screen = prev;
+        app.screen = screen;
+        app
+    }
+
+    const FOOTER_SIZES: [(u16, u16); 8] = [
+        (60, 20),
+        (72, 20),
+        (80, 24),
+        (90, 24),
+        (100, 30),
+        (120, 30),
+        (160, 40),
+        (200, 50),
+    ];
+
+    fn rendered_row_count(text: &str, width: u16) -> u16 {
+        let height = 12u16;
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+        terminal
+            .draw(|frame| {
+                frame.render_widget(
+                    Paragraph::new(Line::raw(text.to_string())).wrap(Wrap { trim: true }),
+                    frame.area(),
+                );
+            })
+            .unwrap();
+        let buffer = terminal.backend().buffer().clone();
+        (0..height)
+            .filter(|y| (0..width).any(|x| buffer.cell((x, *y)).unwrap().symbol().trim() != ""))
+            .count() as u16
+    }
+
+    #[test]
+    fn the_reserved_height_matches_what_ratatui_actually_wraps() {
+        let mut app = browse_app("wrap-count", Screen::Monitor, Screen::Monitor, true);
+        app.status = Some(
+            "this session is archived inside Codex — press u to unarchive it first".to_string(),
+        );
+        let texts = [
+            line_text(&footer_line(&app, 80, 4)),
+            line_text(&footer_line(&app, 200, 4)),
+            line_text(&header_line(&app, true)),
+            "one two three four five six seven eight nine ten".to_string(),
+            "a-single-word-longer-than-the-whole-terminal-width-by-far".to_string(),
+            "  leading and trailing spaces  ".to_string(),
+        ];
+        for text in &texts {
+            for width in [40u16, 57, 60, 72, 80, 100, 120, 160, 200] {
+                let want = rendered_row_count(text, width);
+                let got = wrapped_rows(text, width as usize);
+                assert_eq!(
+                    got, want,
+                    "wrapped_rows disagrees with the renderer at width {width} for {text:?}"
+                );
+                assert_eq!(
+                    wrapped_height(&Line::raw(text.clone()), width as usize, u16::MAX),
+                    want,
+                    "the reserved footer height is wrong at width {width} for {text:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_status_message_does_not_hide_key_hints() {
+        let mut missing: Vec<String> = Vec::new();
+        for (width, height) in FOOTER_SIZES {
+            let mut app = browse_app(
+                &format!("status-{width}"),
+                Screen::Monitor,
+                Screen::Monitor,
+                true,
+            );
+            app.status = Some(
+                "this session is archived inside Codex — press u to unarchive it first".to_string(),
+            );
+            let hints = footer_hints(&app);
+            let footer = footer_text(&mut app, width, height);
+            for (key, label) in hints {
+                let want = hint_text((key.as_str(), label.as_str()));
+                if !footer.contains(&want) {
+                    missing.push(format!("{width}x{height}: {want:?}"));
+                }
+            }
+            assert!(
+                footer.contains("this session is archived inside Codex"),
+                "the status itself vanished at {width}x{height}: {footer:?}"
+            );
+        }
+        assert!(
+            missing.is_empty(),
+            "a status message hid these hints:\n{}",
+            missing.join("\n")
+        );
+    }
+
+    type Setup = fn(&mut App);
+
+    fn footer_states() -> Vec<(&'static str, Setup)> {
+        vec![
+            ("monitor", |_app| {}),
+            ("filtered", |app| {
+                app.filter = Some("session".to_string());
+            }),
+            ("repo", |app| {
+                app.screen = Screen::Repo;
+                app.prev_screen = Screen::Repo;
+            }),
+            ("archive", |app| {
+                app.screen = Screen::Archive;
+                app.prev_screen = Screen::Monitor;
+            }),
+            ("tree", |app| {
+                app.screen = Screen::Tree;
+                app.prev_screen = Screen::Monitor;
+            }),
+            ("archive-tree", |app| {
+                app.screen = Screen::Tree;
+                app.prev_screen = Screen::Archive;
+            }),
+            ("options", |app| {
+                app.screen = Screen::Options;
+                app.prev_screen = Screen::Monitor;
+                app.refresh_options();
+            }),
+            ("limits-popup", |app| {
+                app.show_limits = true;
+            }),
+            ("detail-popup", |app| {
+                app.show_detail = true;
+            }),
+            ("marking-complete", |app| {
+                app.marking = Some(crate::app::Marking::Complete);
+            }),
+            ("marking-delete", |app| {
+                app.marking = Some(crate::app::Marking::Delete);
+            }),
+            ("new-session", |app| {
+                app.pending = Some(Pending::NewSession {
+                    tools: vec![
+                        crate::core::ToolId::Claude,
+                        crate::core::ToolId::Codex,
+                        crate::core::ToolId::Kimi,
+                    ],
+                    selected: 0,
+                });
+            }),
+            ("find", |app| {
+                app.filter_input = Some(crate::app::LineEditor::new("ses".to_string()));
+            }),
+            ("rename", |app| {
+                app.rename_input = Some(crate::app::RenameInput {
+                    key: crate::core::SessionKey {
+                        tool: crate::core::ToolId::Claude,
+                        id: "s0".to_string(),
+                    },
+                    editor: crate::app::LineEditor::new("a new name".to_string()),
+                });
+            }),
+            ("set-project", |app| {
+                app.project_input = Some(crate::app::ProjectInput {
+                    dir: PathBuf::from("/Users/someone/projects/a/deep/checkout"),
+                    editor: crate::app::LineEditor::new("umbrella".to_string()),
+                });
+            }),
+            ("context-window", |app| {
+                app.window_input = Some(crate::app::WindowInput {
+                    model: "opus".to_string(),
+                    editor: crate::app::LineEditor::new("200K".to_string()),
+                });
+            }),
+        ]
+    }
+
+    fn reset(app: &mut App) {
+        app.screen = Screen::Monitor;
+        app.prev_screen = Screen::Monitor;
+        app.rows = probe_rows();
+        app.filter = None;
+        app.filter_input = None;
+        app.window_input = None;
+        app.rename_input = None;
+        app.project_input = None;
+        app.tool_filter = None;
+        app.pending = None;
+        app.status = None;
+        app.marked.clear();
+        app.marking = None;
+        app.show_limits = false;
+        app.show_detail = false;
+        app.selected = 0;
+        app.scroll = 0;
+        app.options.clear();
+        app.options_selected = 0;
+        app.scan_status = None;
+        app.scanning = false;
+        app.last_ctrl_c = None;
+    }
+
+    fn fingerprint(app: &App) -> String {
+        format!(
+            "{:?}|{:?}|{:?}|{:?}|{:?}|{}|{}|{:?}|{}|{}|{}|{}|{}|{}|{}|{:?}|{}|{}|{}|{:?}|{:?}|{:?}|{}|{}|{}|{}",
+            app.screen,
+            app.prev_screen,
+            app.filter,
+            app.tool_filter,
+            app.scope_project,
+            app.selected,
+            app.scroll,
+            app.marking,
+            app.marked.len(),
+            app.show_limits,
+            app.show_detail,
+            app.filter_input.is_some(),
+            app.rename_input.is_some(),
+            app.project_input.is_some(),
+            app.window_input.is_some(),
+            app.status,
+            app.pending.is_some(),
+            app.options.len(),
+            app.options_selected,
+            app.selected_key,
+            app.scan_status,
+            app.rows
+                .iter()
+                .map(|row| (row.completed, row.completed_at))
+                .collect::<Vec<_>>(),
+            app.scanning,
+            app.last_ctrl_c.is_some(),
+            app.pending_snapshot.is_some(),
+            app.apply_next_snapshot,
+        )
+    }
+
+    fn probe_keys() -> Vec<(KeyEvent, String)> {
+        let mut keys = Vec::new();
+        for c in 'a'..='z' {
+            keys.push((
+                KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE),
+                c.to_string(),
+            ));
+            let upper = c.to_ascii_uppercase();
+            keys.push((
+                KeyEvent::new(KeyCode::Char(upper), KeyModifiers::SHIFT),
+                upper.to_string(),
+            ));
+            keys.push((
+                KeyEvent::new(KeyCode::Char(c), KeyModifiers::CONTROL),
+                format!("ctrl+{c}"),
+            ));
+        }
+        for c in '1'..='9' {
+            keys.push((
+                KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE),
+                c.to_string(),
+            ));
+        }
+        for (code, name) in [
+            (KeyCode::Tab, "tab"),
+            (KeyCode::Esc, "esc"),
+            (KeyCode::Enter, "enter"),
+            (KeyCode::Up, "↑"),
+            (KeyCode::Down, "↓"),
+            (KeyCode::Left, "←"),
+            (KeyCode::Right, "→"),
+            (KeyCode::Home, "home"),
+            (KeyCode::End, "end"),
+            (KeyCode::Backspace, "backspace"),
+            (KeyCode::Delete, "delete"),
+        ] {
+            keys.push((KeyEvent::new(code, KeyModifiers::NONE), name.to_string()));
+        }
+        keys.push((
+            KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT),
+            "shift+tab".to_string(),
+        ));
+        keys
+    }
+
+    fn hint_covers(hints: &[(String, String)], pressed: &str) -> bool {
+        hints.iter().any(|(key, _)| {
+            key == "any key"
+                || key.split('/').any(|part| {
+                    if part == pressed {
+                        return true;
+                    }
+                    match (part.split_once('-'), pressed.chars().next()) {
+                        (Some((first, last)), Some(digit)) if pressed.chars().count() == 1 => {
+                            first.len() == 1
+                                && last.len() == 1
+                                && (first.chars().next().unwrap()..=last.chars().next().unwrap())
+                                    .contains(&digit)
+                        }
+                        _ => false,
+                    }
+                })
+        })
+    }
+
+    const TYPING_STATES: [&str; 4] = ["find", "rename", "set-project", "context-window"];
+
+    const APP_SOURCE: &str = include_str!("../mod.rs");
+    const MONITOR_SOURCE: &str = include_str!("monitor.rs");
+
+    fn without_tests(source: &str) -> &str {
+        source
+            .find("#[cfg(test)]")
+            .map_or(source, |cut| &source[..cut])
+    }
+
+    fn keys_bound_in(source: &str) -> std::collections::BTreeSet<String> {
+        let mut keys = std::collections::BTreeSet::new();
+        for (at, _) in source.match_indices("KeyCode::") {
+            let rest = &source[at + "KeyCode::".len()..];
+            let name: String = rest
+                .chars()
+                .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+                .collect();
+            if name.is_empty() {
+                continue;
+            }
+            if name != "Char" {
+                keys.insert(name);
+                continue;
+            }
+            let mut literal = rest[name.len()..].chars();
+            if literal.next() != Some('(') || literal.next() != Some('\'') {
+                continue;
+            }
+            let (Some(c), Some('\'')) = (literal.next(), literal.next()) else {
+                continue;
+            };
+            keys.insert(format!("Char('{c}')"));
+        }
+        keys
+    }
+
+    fn block_after(source: &str, marker: &str, end: &str) -> String {
+        let start = source
+            .find(marker)
+            .unwrap_or_else(|| panic!("{marker:?} is gone — this test needs updating"))
+            + marker.len();
+        let rest = &source[start..];
+        let stop = rest
+            .find(end)
+            .unwrap_or_else(|| panic!("no end for {marker:?}"));
+        rest[..stop].to_string()
+    }
+
+    fn field_names(block: &str) -> std::collections::BTreeSet<String> {
+        block
+            .lines()
+            .filter_map(|line| line.trim().strip_prefix("pub "))
+            .filter_map(|line| line.split_once(':'))
+            .map(|(name, _)| name.trim().to_string())
+            .collect()
+    }
+
+    #[test]
+    fn the_key_probe_presses_every_key_the_app_binds() {
+        let bound = keys_bound_in(without_tests(APP_SOURCE));
+        assert!(
+            bound.len() > 20 && bound.contains("Char('u')") && bound.contains("Tab"),
+            "the key scan stopped finding bindings — it reads {bound:?}"
+        );
+        let probed: std::collections::BTreeSet<String> = probe_keys()
+            .iter()
+            .map(|(event, _)| format!("{:?}", event.code))
+            .collect();
+        let unpressed: Vec<&String> = bound
+            .iter()
+            .filter(|key| key.as_str() != "Char" && !probed.contains(*key))
+            .collect();
+        assert!(
+            unpressed.is_empty(),
+            "keys the app binds but no test ever presses: {unpressed:?}"
+        );
+    }
+
+    #[test]
+    fn the_fingerprint_watches_every_field_a_key_can_change() {
+        const NOT_KEY_DRIVEN: [&str; 9] = [
+            "store",
+            "rows",
+            "limits",
+            "limits_disabled",
+            "allowlist_mode",
+            "repo",
+            "repo_forced",
+            "received_first_snapshot",
+            "pending_snapshot",
+        ];
+        let fields: std::collections::BTreeSet<String> =
+            field_names(&block_after(APP_SOURCE, "pub struct App {", "\n}"));
+        assert!(
+            fields.len() > 20 && fields.contains("screen"),
+            "the field scan stopped finding App fields — it reads {fields:?}"
+        );
+        let watched = block_after(
+            MONITOR_SOURCE,
+            "fn fingerprint(app: &App) -> String {",
+            "\n    }",
+        );
+        let unwatched: Vec<&String> = fields
+            .iter()
+            .filter(|field| !NOT_KEY_DRIVEN.contains(&field.as_str()))
+            .filter(|field| !watched.contains(&format!("app.{field}")))
+            .collect();
+        assert!(
+            unwatched.is_empty(),
+            "a key could change these without any test noticing: {unwatched:?}"
+        );
+        let stale: Vec<&str> = NOT_KEY_DRIVEN
+            .iter()
+            .filter(|field| !fields.iter().any(|known| known == *field))
+            .copied()
+            .collect();
+        assert!(
+            stale.is_empty(),
+            "exemptions for fields that are gone: {stale:?}"
+        );
+    }
+
+    #[test]
+    fn the_footer_states_reach_every_screen() {
+        let variants: std::collections::BTreeSet<String> =
+            block_after(APP_SOURCE, "pub enum Screen {", "\n}")
+                .lines()
+                .map(|line| line.trim().trim_end_matches(',').to_string())
+                .filter(|line| !line.is_empty())
+                .collect();
+        assert!(
+            variants.len() > 2 && variants.contains("Archive"),
+            "the Screen scan stopped finding variants — it reads {variants:?}"
+        );
+        let mut app = browse_app("state-coverage", Screen::Monitor, Screen::Monitor, true);
+        let mut reached = std::collections::BTreeSet::new();
+        for (_, setup) in footer_states() {
+            reset(&mut app);
+            setup(&mut app);
+            reached.insert(format!("{:?}", app.screen));
+        }
+        let unreached: Vec<&String> = variants.difference(&reached).collect();
+        assert!(
+            unreached.is_empty(),
+            "no footer state renders these screens: {unreached:?}"
+        );
+    }
+
+    #[test]
+    fn every_key_that_does_something_is_advertised_in_the_footer() {
+        let mut app = browse_app("coverage", Screen::Monitor, Screen::Monitor, true);
+        let mut missing: Vec<String> = Vec::new();
+        for (name, setup) in footer_states() {
+            if TYPING_STATES.contains(&name) {
+                continue;
+            }
+            for (event, pressed) in probe_keys() {
+                reset(&mut app);
+                setup(&mut app);
+                let hints = footer_hints(&app);
+                let before = fingerprint(&app);
+                let action = app.handle_key(event);
+                let acted = fingerprint(&app) != before || !matches!(action, Action::None);
+                if acted && !hint_covers(&hints, &pressed) {
+                    missing.push(format!("{name}: {pressed}"));
+                }
+            }
+        }
+        assert!(
+            missing.is_empty(),
+            "keys that act without a hint:\n{}",
+            missing.join("\n")
+        );
+    }
+
+    #[test]
+    fn every_key_hint_is_visible_in_every_state() {
+        let mut missing: Vec<String> = Vec::new();
+        for (name, setup) in footer_states() {
+            for (width, height) in FOOTER_SIZES {
+                let mut app = browse_app(
+                    &format!("visible-{name}-{width}"),
+                    Screen::Monitor,
+                    Screen::Monitor,
+                    true,
+                );
+                setup(&mut app);
+                let hints = footer_hints(&app);
+                let footer = footer_text(&mut app, width, height);
+                for (key, label) in hints {
+                    let want = hint_text((key.as_str(), label.as_str()));
+                    if !footer.contains(&want) {
+                        missing.push(format!("{name} at {width}x{height}: {want:?}"));
+                    }
+                }
+            }
+        }
+        assert!(
+            missing.is_empty(),
+            "hints not rendered:\n{}",
+            missing.join("\n")
+        );
     }
 
     #[test]

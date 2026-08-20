@@ -1,4 +1,4 @@
-mod monitor;
+pub(super) mod monitor;
 mod options;
 
 use ratatui::Frame;

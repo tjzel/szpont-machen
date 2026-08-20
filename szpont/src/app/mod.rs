@@ -312,6 +312,10 @@ impl App {
         }
     }
 
+    pub fn has_filters(&self) -> bool {
+        self.filter.is_some() || self.tool_filter.is_some() || !self.marked.is_empty()
+    }
+
     pub fn scope_label(&self) -> Option<&'static str> {
         match self.screen {
             Screen::Repo => Some("global scope"),
@@ -499,6 +503,12 @@ impl App {
         }
         if self.project_input.is_some() {
             return self.handle_project_key(key);
+        }
+        if key
+            .modifiers
+            .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SUPER)
+        {
+            return Action::None;
         }
         if self.pending.is_some() {
             return self.handle_pending_key(key);
@@ -1159,16 +1169,6 @@ impl App {
         let Some(row) = self.selected_row() else {
             return;
         };
-        let session_key = row.session.key.clone();
-        let native = row.session.native_archived;
-        let has_szpont_mark = row.completed_at.is_some();
-        if native && !has_szpont_mark {
-            self.status = Some(format!(
-                "this session is archived inside {} itself — unarchive it there",
-                session_key.tool.display_name()
-            ));
-            return;
-        }
         if row.demo_archived {
             self.status = Some(
                 "this session is archived by the demo config — set archived to false there"
@@ -1176,15 +1176,42 @@ impl App {
             );
             return;
         }
-        match self.store.reopen(session_key.tool, &session_key.id) {
+        let session = row.session.clone();
+        let native = session.native_archived;
+        if native && !self.unarchive_natively(&session) {
+            return;
+        }
+        match self.store.reopen(session.key.tool, &session.key.id) {
             Ok(_) => {
-                if let Some(row) = self.rows.iter_mut().find(|r| r.session.key == session_key) {
-                    row.completed = row.session.native_archived;
+                if let Some(row) = self.rows.iter_mut().find(|r| r.session.key == session.key) {
+                    row.session.native_archived = false;
+                    row.completed = false;
                     row.completed_at = None;
                 }
-                self.status = Some("session reopened".to_string());
+                self.status = Some(if native {
+                    format!("session unarchived in {}", session.key.tool.display_name())
+                } else {
+                    "session reopened".to_string()
+                });
             }
             Err(err) => self.status = Some(format!("error: {err:#}")),
+        }
+    }
+
+    fn unarchive_natively(&mut self, session: &crate::core::SessionSummary) -> bool {
+        let Some(adapter) = adapters::by_id(session.key.tool) else {
+            self.status = Some(format!(
+                "this session is archived inside {} itself — unarchive it there",
+                session.key.tool.display_name()
+            ));
+            return false;
+        };
+        match adapter.unarchive_session(session) {
+            Ok(()) => true,
+            Err(err) => {
+                self.status = Some(format!("{err:#}"));
+                false
+            }
         }
     }
 
@@ -1195,6 +1222,13 @@ impl App {
         let Some(adapter) = adapters::by_id(row.session.key.tool) else {
             return Action::None;
         };
+        if row.session.native_archived && adapter.resume_needs_unarchive() {
+            self.status = Some(format!(
+                "this session is archived inside {} — press u to unarchive it first",
+                row.session.key.tool.display_name()
+            ));
+            return Action::None;
+        }
         let spec = adapter.resume_command(&row.session);
         if !spec.cwd.exists() {
             self.status = Some(format!(
@@ -1658,6 +1692,58 @@ mod tests {
         assert_eq!(app.screen, Screen::Tree);
         app.handle_key(key(KeyCode::Esc));
         assert_eq!(app.screen, Screen::Monitor);
+    }
+
+    #[test]
+    fn u_on_a_tool_without_unarchive_support_says_where_to_unarchive() {
+        let mut app = test_app("native-archive-unsupported");
+        app.rows[0].session.key.tool = ToolId::Kimi;
+        app.rows[0].session.native_archived = true;
+        app.rows[0].completed = true;
+        app.handle_key(key(KeyCode::Char('a')));
+        app.handle_key(key(KeyCode::Char('u')));
+        assert!(app.rows[0].session.native_archived);
+        assert!(app.rows[0].completed);
+        assert_eq!(
+            app.status.as_deref(),
+            Some("this session is archived inside Kimi Code itself — unarchive it there")
+        );
+    }
+
+    #[test]
+    fn u_asks_the_tool_to_unarchive_a_natively_archived_session() {
+        let mut app = test_app("native-archive-delegates");
+        app.rows[0].session.key.tool = ToolId::Codex;
+        app.rows[0].session.key.id = "-rf".to_string();
+        app.rows[0].session.native_archived = true;
+        app.rows[0].completed = true;
+        app.handle_key(key(KeyCode::Char('a')));
+        app.handle_key(key(KeyCode::Char('u')));
+        assert!(
+            app.status
+                .as_deref()
+                .is_some_and(|s| s.contains("unexpected codex session id")),
+            "u must reach the codex adapter, got {:?}",
+            app.status
+        );
+        assert!(app.rows[0].session.native_archived);
+        assert!(app.rows[0].completed);
+    }
+
+    #[test]
+    fn enter_refuses_to_resume_a_natively_archived_session() {
+        let mut app = test_app("native-archive-resume");
+        app.rows[0].session.key.tool = ToolId::Codex;
+        app.rows[0].session.native_archived = true;
+        app.rows[0].session.cwd = Some(PathBuf::from("."));
+        app.rows[0].completed = true;
+        app.handle_key(key(KeyCode::Char('a')));
+        let action = app.handle_key(key(KeyCode::Enter));
+        assert!(matches!(action, Action::None));
+        assert_eq!(
+            app.status.as_deref(),
+            Some("this session is archived inside Codex — press u to unarchive it first")
+        );
     }
 
     #[test]

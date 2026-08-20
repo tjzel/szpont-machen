@@ -47,6 +47,15 @@ pub trait ToolAdapter {
             session.key.tool.display_name()
         )
     }
+    fn unarchive_session(&self, session: &SessionSummary) -> anyhow::Result<()> {
+        anyhow::bail!(
+            "this session is archived inside {} itself — unarchive it there",
+            session.key.tool.display_name()
+        )
+    }
+    fn resume_needs_unarchive(&self) -> bool {
+        false
+    }
     fn liveness(&self, session: &SessionSummary) -> Liveness;
     fn resume_command(&self, session: &SessionSummary) -> LaunchSpec;
     fn new_session_command(&self, cwd: &Path) -> LaunchSpec;

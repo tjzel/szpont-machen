@@ -2,17 +2,21 @@ use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout};
 use ratatui::style::{Color, Modifier, Style, Stylize};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, List, ListItem, Paragraph};
+use ratatui::widgets::{Block, List, ListItem, Paragraph, Wrap};
 
 use crate::app::App;
 use crate::core::format_tokens;
 
 pub fn draw(frame: &mut Frame, app: &mut App) {
+    let width = frame.area().width.max(1) as usize;
+    let cap = super::monitor::footer_cap(frame.area().height);
+    let footer = super::monitor::footer_line(app, width, cap);
+    let footer_height = super::monitor::wrapped_height(&footer, width, cap);
     let [header_area, body_area, separator_area, footer_area] = Layout::vertical([
         Constraint::Length(1),
         Constraint::Min(1),
         Constraint::Length(1),
-        Constraint::Length(1),
+        Constraint::Length(footer_height),
     ])
     .areas(frame.area());
     frame.render_widget(
@@ -73,33 +77,8 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
             .style(Style::new().fg(Color::DarkGray)),
         separator_area,
     );
-    let footer = if let Some(input) = &app.window_input {
-        let style = Style::new().fg(Color::Yellow);
-        let mut spans = vec![Span::styled(
-            format!(" context window for {}: ", input.model),
-            style,
-        )];
-        spans.extend(input.editor.cursor_spans(style));
-        spans.extend(vec![
-            Span::raw("   "),
-            Span::styled("enter", Style::new().fg(Color::Cyan).bold()),
-            Span::styled(" save  ·  ", Style::new().fg(Color::DarkGray)),
-            Span::styled("esc", Style::new().fg(Color::Cyan).bold()),
-            Span::styled(" cancel", Style::new().fg(Color::Gray)),
-        ]);
-        Line::from(spans)
-    } else {
-        Line::from(vec![
-            Span::raw(" "),
-            Span::styled("↑/↓", Style::new().fg(Color::Cyan).bold()),
-            Span::styled(" move  ·  ", Style::new().fg(Color::DarkGray)),
-            Span::styled("enter", Style::new().fg(Color::Cyan).bold()),
-            Span::styled(" set context window  ·  ", Style::new().fg(Color::Gray)),
-            Span::styled("esc", Style::new().fg(Color::Cyan).bold()),
-            Span::styled(" back  ·  ", Style::new().fg(Color::Gray)),
-            Span::styled("ctrl+c", Style::new().fg(Color::Cyan).bold()),
-            Span::styled(" quit", Style::new().fg(Color::Gray)),
-        ])
-    };
-    frame.render_widget(Paragraph::new(footer), footer_area);
+    frame.render_widget(
+        Paragraph::new(footer).wrap(Wrap { trim: true }),
+        footer_area,
+    );
 }

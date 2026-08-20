@@ -81,7 +81,7 @@ pub fn reopen(cli: &Cli, tool: &str, session_id: &str) -> anyhow::Result<()> {
         println!("reopened {} session {session_id}", tool.as_str());
     } else {
         println!(
-            "{} session {session_id} had no szpont completed mark (a native archive flag cannot be cleared from szpont)",
+            "{} session {session_id} had no szpont completed mark (clear a native archive flag with u in the szpont UI, or in the tool itself)",
             tool.as_str()
         );
     }

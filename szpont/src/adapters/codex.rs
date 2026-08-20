@@ -93,17 +93,15 @@ impl ToolAdapter for CodexAdapter {
     }
 
     fn delete_session(&self, session: &SessionSummary) -> anyhow::Result<()> {
-        if session.key.id.starts_with('-') {
-            anyhow::bail!("unexpected codex session id {:?}", session.key.id);
-        }
-        let output = std::process::Command::new("codex")
-            .args(["delete", &session.key.id])
-            .output()?;
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            anyhow::bail!("codex delete failed: {}", stderr.trim());
-        }
-        Ok(())
+        run_codex("delete", &session.key.id)
+    }
+
+    fn unarchive_session(&self, session: &SessionSummary) -> anyhow::Result<()> {
+        run_codex("unarchive", &session.key.id)
+    }
+
+    fn resume_needs_unarchive(&self) -> bool {
+        true
     }
 
     fn liveness(&self, session: &SessionSummary) -> Liveness {
@@ -138,6 +136,20 @@ impl ToolAdapter for CodexAdapter {
             cwd: cwd.to_path_buf(),
         }
     }
+}
+
+fn run_codex(subcommand: &str, session_id: &str) -> anyhow::Result<()> {
+    if !crate::core::valid_session_id(session_id, None) {
+        anyhow::bail!("unexpected codex session id {session_id:?}");
+    }
+    let output = std::process::Command::new("codex")
+        .args([subcommand, session_id])
+        .output()?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        anyhow::bail!("codex {subcommand} failed: {}", stderr.trim());
+    }
+    Ok(())
 }
 
 fn sessions_db(root: &Path) -> Option<PathBuf> {
@@ -298,6 +310,15 @@ fn tail_token_count(rollout: &Path) -> Option<TokenCountInfo> {
 #[cfg(test)]
 mod tests {
     use crate::core::valid_session_id;
+
+    #[test]
+    fn codex_subcommands_refuse_an_unsafe_session_id() {
+        let err = super::run_codex("unarchive", "-rf").unwrap_err();
+        assert!(
+            err.to_string().contains("unexpected codex session id"),
+            "unexpected error: {err}"
+        );
+    }
 
     #[test]
     fn session_id_validation_rejects_unsafe_ids() {
