@@ -51,7 +51,9 @@ impl Store {
         {
             create_private_dir(dir)?;
         }
-        create_private_file(&path)?;
+        if !path.exists() {
+            create_private_file(&path)?;
+        }
         let conn = Connection::open(&path)?;
         for suffix in ["", "-wal", "-shm"] {
             let mut target = path.clone().into_os_string();
@@ -316,12 +318,16 @@ fn create_private_dir(dir: &Path) -> anyhow::Result<()> {
 
 fn create_private_file(path: &Path) -> anyhow::Result<()> {
     use std::os::unix::fs::OpenOptionsExt;
-    std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
+    match std::fs::OpenOptions::new()
+        .create_new(true)
+        .write(true)
         .mode(0o600)
-        .open(path)?;
-    Ok(())
+        .open(path)
+    {
+        Ok(_) => Ok(()),
+        Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => Ok(()),
+        Err(err) => Err(err.into()),
+    }
 }
 
 fn restrict_tree(path: &Path) {
@@ -690,6 +696,38 @@ mod tests {
                 assert_eq!(mode, 0o600, "{}", target.display());
             }
         }
+    }
+
+    #[test]
+    fn an_existing_database_file_is_never_opened_behind_sqlites_back() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = PathBuf::from(".tmp/fixtures");
+        std::fs::create_dir_all(&dir).unwrap();
+        let db = dir.join("store-no-stray-open.db");
+        let _ = std::fs::remove_file(&db);
+        std::fs::write(&db, b"").unwrap();
+        std::fs::set_permissions(&db, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let opened = create_private_file(&db);
+        std::fs::set_permissions(&db, std::fs::Permissions::from_mode(0o600)).unwrap();
+        assert!(
+            opened.is_ok(),
+            "create_private_file opened a file it did not create; a close() on the \
+             database cancels this process's POSIX advisory locks on it: {opened:?}"
+        );
+    }
+
+    #[test]
+    fn an_existing_database_file_is_still_forced_private() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = PathBuf::from(".tmp/fixtures");
+        std::fs::create_dir_all(&dir).unwrap();
+        let db = dir.join("store-existing-private.db");
+        let _ = std::fs::remove_file(&db);
+        drop(Store::open(Some(&db)).unwrap());
+        std::fs::set_permissions(&db, std::fs::Permissions::from_mode(0o644)).unwrap();
+        drop(Store::open(Some(&db)).unwrap());
+        let mode = std::fs::metadata(&db).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600);
     }
 
     #[test]
