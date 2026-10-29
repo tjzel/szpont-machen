@@ -429,7 +429,7 @@ mod tests {
         let mut empty = std::io::BufReader::new(&b""[..]);
         let capped = read_line_capped(&mut empty, 64).unwrap();
         assert!(!capped.complete);
-        assert!(capped.bytes.is_empty());
+        assert_eq!(capped.bytes, Vec::<u8>::new());
     }
 
     #[test]

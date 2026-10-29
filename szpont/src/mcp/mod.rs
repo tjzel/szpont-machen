@@ -160,7 +160,7 @@ mod tests {
         for tool in tools {
             let schema = &tool["inputSchema"];
             assert!(schema.is_object());
-            assert!(!schema["required"].as_array().unwrap().is_empty());
+            assert_ne!(*schema["required"].as_array().unwrap(), Vec::<Value>::new());
             assert_eq!(schema["additionalProperties"], false);
         }
     }
@@ -179,7 +179,7 @@ mod tests {
     fn initialize_documents_every_advertised_tool() {
         let result = protocol::initialize_result(&Value::Null);
         let instructions = result["instructions"].as_str().unwrap();
-        assert!(!instructions.trim().is_empty());
+        assert_ne!(instructions.trim(), "");
         for tool in tools::definitions() {
             let name = tool["name"].as_str().unwrap();
             assert!(

@@ -1939,7 +1939,7 @@ mod tests {
         assert_eq!(row_tree_components(&app.rows[0]), vec!["Demo Project"]);
 
         app.filter = Some("secret-project".to_string());
-        assert!(app.visible_indices().is_empty());
+        assert_eq!(app.visible_indices(), Vec::<usize>::new());
         app.filter = Some("Demo Project".to_string());
         assert_eq!(app.visible_indices(), vec![0]);
 
