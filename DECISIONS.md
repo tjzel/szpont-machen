@@ -51,3 +51,4 @@ reason was not written down.
 | 2026-08-11 | Releases use cargo-dist (GitHub Release, shell installer with `szpont-update`, Homebrew tap) and publish to crates.io; see [RELEASING.md](RELEASING.md) | Several install channels from one tag | Manual builds |
 | 2026-08-11 | The docs site is a Next.js static export in `docs/`, deployed to Cloudflare Pages | — | — |
 | 2026-10-29 | `FEATURES.md`, `DECISIONS.md` and `FUTURE_IDEAS.md` at the repository root, in the format of the structured-agent project; `TODO.md` became `FUTURE_IDEAS.md` | `docs/` is the website | Files in `docs/` |
+| 2026-10-29 | The docs pages are formatted with Prettier, pinned to an exact version (3.9.10) in `docs/package.json`, with default options. `pnpm --dir docs format` formats; the docs workflow runs `format:check` before it deploys | `npx prettier` used whatever version was on the machine, and the pages had drifted from its style | Unpinned `npx prettier`; no check |
