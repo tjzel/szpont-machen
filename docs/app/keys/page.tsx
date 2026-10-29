@@ -95,8 +95,9 @@ export default function Keys() {
               <code>p</code>
             </td>
             <td>
-              toggle scope — global (all repos) vs local (current repo); shown
-              only when inside a repo
+              toggle scope — global (all sessions) vs local (the current git
+              repository, or the current directory when it is not in one; the
+              project instead when the directory belongs to one)
             </td>
           </tr>
           <tr>
@@ -122,6 +123,16 @@ export default function Keys() {
             <td>
               rename the selected session (szpont-side custom title; survives
               rescans)
+            </td>
+          </tr>
+          <tr>
+            <td>
+              <code>s</code>
+            </td>
+            <td>
+              assign the selected session&apos;s directory to a project (shown
+              in the <code>PROJECT</code> column); several directories can share
+              one project; an empty name clears it
             </td>
           </tr>
           <tr>
