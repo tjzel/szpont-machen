@@ -11,16 +11,16 @@ export default function Features() {
       <ul>
         <li>
           Tracks sessions of <strong>Claude Code</strong>,{" "}
-          <strong>Codex CLI</strong> and <strong>Kimi Code</strong> in one
-          list, scanned read-only from each tool&apos;s native store.
+          <strong>Codex CLI</strong> and <strong>Kimi Code</strong> in one list,
+          scanned read-only from each tool&apos;s native store.
         </li>
         <li>
           Live status per session: <code>RUNNING</code>, <code>BLOCKED</code>,{" "}
           <code>IDLE</code>.
         </li>
         <li>
-          Resume any session with the right tool via <code>Enter</code> —
-          szpont steps aside, so leaving the tool drops you back at the shell.
+          Resume any session with the right tool via <code>Enter</code> — szpont
+          steps aside, so leaving the tool drops you back at the shell.
         </li>
         <li>
           Incremental parsing: after the first scan, refreshes read only
@@ -32,13 +32,12 @@ export default function Features() {
       <ul>
         <li>Token usage per session, subagents included.</li>
         <li>
-          Context-window usage per session (<code>used/window</code> with a
-          fill bar in the <code>CTX</code> column when the window size is
-          known).
+          Context-window usage per session (<code>used/window</code> with a fill
+          bar in the <code>CTX</code> column when the window size is known).
         </li>
         <li>
-          Rate-limit state per tool, with exact values from the
-          providers&apos; usage endpoints.
+          Rate-limit state per tool, with exact values from the providers&apos;
+          usage endpoints.
         </li>
       </ul>
 

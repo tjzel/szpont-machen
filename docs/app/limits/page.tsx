@@ -9,8 +9,8 @@ export default function Limits() {
       <ul>
         <li>
           <strong>Codex</strong>: exact values (<code>used_percent</code>,
-          window, reset time, plan) parsed from <code>rate_limits</code>{" "}
-          events in the newest rollout file.
+          window, reset time, plan) parsed from <code>rate_limits</code> events
+          in the newest rollout file.
         </li>
         <li>
           <strong>Claude Code</strong>: token totals per rolling 5h / 7d window
@@ -21,8 +21,8 @@ export default function Limits() {
           week, per-model weeks, extra usage).
         </li>
         <li>
-          <strong>Kimi Code</strong>: no limit data on disk; the quota cycle
-          and every windowed limit (e.g. the 5h window) come from Kimi&apos;s{" "}
+          <strong>Kimi Code</strong>: no limit data on disk; the quota cycle and
+          every windowed limit (e.g. the 5h window) come from Kimi&apos;s{" "}
           <code>/usages</code> endpoint, with the membership level as the plan.
         </li>
       </ul>

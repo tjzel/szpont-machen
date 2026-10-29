@@ -8,8 +8,8 @@ export default function Mcp() {
       <h1>MCP integration</h1>
       <p>
         <code>szpont install-mcp</code> registers <code>szpont mcp</code> with
-        all three tools (<code>claude mcp add</code>, <code>codex mcp add</code>,{" "}
-        <code>~/.kimi-code/mcp.json</code>). Agents can then call:
+        all three tools (<code>claude mcp add</code>, <code>codex mcp add</code>
+        , <code>~/.kimi-code/mcp.json</code>). Agents can then call:
       </p>
       <table>
         <tbody>

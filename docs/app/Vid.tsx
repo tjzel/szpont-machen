@@ -6,7 +6,9 @@ export default function Vid({ name, alt }: { name: string; alt: string }) {
   const [safari, setSafari] = useState<boolean | null>(null);
 
   useEffect(() => {
-    setSafari(/^((?!chrome|chromium|android).)*safari/i.test(navigator.userAgent));
+    setSafari(
+      /^((?!chrome|chromium|android).)*safari/i.test(navigator.userAgent),
+    );
   }, []);
 
   return (

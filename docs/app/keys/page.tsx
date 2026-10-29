@@ -76,8 +76,8 @@ export default function Keys() {
               <code>Enter</code> / <code>Esc</code> or <code>q</code>. Deletion
               removes the session from szpont <strong>and</strong> from the
               tool&apos;s own storage (<code>codex delete</code>; file removal
-              for Claude Code and Kimi, which have no delete command).
-              Sessions still open in a tool are skipped.
+              for Claude Code and Kimi, which have no delete command). Sessions
+              still open in a tool are skipped.
             </td>
           </tr>
           <tr>
@@ -140,8 +140,8 @@ export default function Keys() {
               <code>Esc</code>
             </td>
             <td>
-              back from archive or tree view · clear marks · clear filters —
-              one step per press
+              back from archive or tree view · clear marks · clear filters — one
+              step per press
             </td>
           </tr>
           <tr>
@@ -210,9 +210,7 @@ export default function Keys() {
             <td>
               <code>BLOCKED</code> (yellow)
             </td>
-            <td>
-              waiting for your input (reported for Claude Code only)
-            </td>
+            <td>waiting for your input (reported for Claude Code only)</td>
           </tr>
           <tr>
             <td>
@@ -231,25 +229,25 @@ export default function Keys() {
       </table>
       <p>
         The list always sits in a tinted frame that names the mode: neutral
-        &quot; sessions &quot;, magenta &quot; archive &quot;, yellow
-        &quot; marking as completed &quot;, red &quot; marking for deletion
-        &quot;, green &quot; new session &quot;, cyan &quot; options &quot;.
+        &quot; sessions &quot;, magenta &quot; archive &quot;, yellow &quot;
+        marking as completed &quot;, red &quot; marking for deletion &quot;,
+        green &quot; new session &quot;, cyan &quot; options &quot;.
       </p>
       <p>
         Background rescans never reorder the list under you: updates that keep
         the visible row order (token counts, status changes) apply live, while
         updates that would add, remove or reorder rows are held — the top bar
         shows &quot;⟳ list changed — press r to refresh&quot;. <code>r</code>{" "}
-        applies the held update instantly and rescans; your own actions
-        (resume, complete, delete) always apply immediately too.
+        applies the held update instantly and rescans; your own actions (resume,
+        complete, delete) always apply immediately too.
       </p>
       <p>
         The <code>CTX</code> column shows context-window usage as{" "}
         <code>used/window</code> token counts with a fill bar when the window
         size is known (Codex reports it in its rollout; Kimi&apos;s comes from{" "}
-        <code>~/.kimi-code/config.toml</code>), otherwise the raw token count
-        of the last request (Claude Code does not record its window size
-        locally — set it once per model in the <code>o</code> options screen).
+        <code>~/.kimi-code/config.toml</code>), otherwise the raw token count of
+        the last request (Claude Code does not record its window size locally —
+        set it once per model in the <code>o</code> options screen).
       </p>
     </>
   );

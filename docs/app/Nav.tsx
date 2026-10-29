@@ -18,7 +18,11 @@ export default function Nav() {
   return (
     <nav>
       {LINKS.map(({ href, label }) => (
-        <Link key={href} href={href} className={pathname === href ? "active" : ""}>
+        <Link
+          key={href}
+          href={href}
+          className={pathname === href ? "active" : ""}
+        >
           {label}
         </Link>
       ))}

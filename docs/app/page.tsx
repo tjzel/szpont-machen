@@ -24,8 +24,8 @@ export default function Overview() {
       <p>
         A terminal manager for AI CLI tool sessions —{" "}
         <strong>Claude Code</strong>, <strong>Codex CLI</strong> and{" "}
-        <strong>Kimi Code</strong>. Pronounced <em>&quot;shpont
-        mah-khen&quot;</em>.
+        <strong>Kimi Code</strong>. Pronounced{" "}
+        <em>&quot;shpont mah-khen&quot;</em>.
       </p>
 
       <h2>Install</h2>
@@ -33,7 +33,9 @@ export default function Overview() {
       <pre>
         <code>brew install tjzel/tap/szpont</code>
       </pre>
-      <p>Shell installer (prebuilt binaries, self-updates via szpont-update):</p>
+      <p>
+        Shell installer (prebuilt binaries, self-updates via szpont-update):
+      </p>
       <pre>
         <code>
           curl -LsSf
