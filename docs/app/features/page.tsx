@@ -20,7 +20,7 @@ export default function Features() {
         </li>
         <li>
           Resume any session with the right tool via <code>Enter</code> —
-          szpont suspends and returns when the tool exits.
+          szpont steps aside, so leaving the tool drops you back at the shell.
         </li>
         <li>
           Incremental parsing: after the first scan, refreshes read only

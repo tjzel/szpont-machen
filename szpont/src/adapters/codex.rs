@@ -93,11 +93,11 @@ impl ToolAdapter for CodexAdapter {
     }
 
     fn delete_session(&self, session: &SessionSummary) -> anyhow::Result<()> {
-        run_codex("delete", &session.key.id)
+        run_codex(&delete_args(&session.key.id)?)
     }
 
     fn unarchive_session(&self, session: &SessionSummary) -> anyhow::Result<()> {
-        run_codex("unarchive", &session.key.id)
+        run_codex(&unarchive_args(&session.key.id)?)
     }
 
     fn resume_needs_unarchive(&self) -> bool {
@@ -138,18 +138,32 @@ impl ToolAdapter for CodexAdapter {
     }
 }
 
-fn run_codex(subcommand: &str, session_id: &str) -> anyhow::Result<()> {
-    if !crate::core::valid_session_id(session_id, None) {
-        anyhow::bail!("unexpected codex session id {session_id:?}");
-    }
-    let output = std::process::Command::new("codex")
-        .args([subcommand, session_id])
-        .output()?;
+fn run_codex(args: &[String]) -> anyhow::Result<()> {
+    let subcommand = args.first().map_or("", String::as_str);
+    let output = std::process::Command::new("codex").args(args).output()?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         anyhow::bail!("codex {subcommand} failed: {}", stderr.trim());
     }
     Ok(())
+}
+
+fn delete_args(session_id: &str) -> anyhow::Result<Vec<String>> {
+    codex_args("delete", &["--force"], session_id)
+}
+
+fn unarchive_args(session_id: &str) -> anyhow::Result<Vec<String>> {
+    codex_args("unarchive", &[], session_id)
+}
+
+fn codex_args(subcommand: &str, flags: &[&str], session_id: &str) -> anyhow::Result<Vec<String>> {
+    if !crate::core::valid_session_id(session_id, None) {
+        anyhow::bail!("unexpected codex session id {session_id:?}");
+    }
+    let mut args = vec![subcommand.to_string()];
+    args.extend(flags.iter().map(|flag| (*flag).to_string()));
+    args.push(session_id.to_string());
+    Ok(args)
 }
 
 fn sessions_db(root: &Path) -> Option<PathBuf> {
@@ -313,10 +327,28 @@ mod tests {
 
     #[test]
     fn codex_subcommands_refuse_an_unsafe_session_id() {
-        let err = super::run_codex("unarchive", "-rf").unwrap_err();
+        let err = super::unarchive_args("-rf").unwrap_err();
         assert!(
             err.to_string().contains("unexpected codex session id"),
             "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn delete_is_forced_because_codex_cannot_prompt_without_a_terminal() {
+        let id = "019fa33b-1ff5-7110-b9a4-82c5a1a86484";
+        assert_eq!(
+            super::delete_args(id).unwrap(),
+            vec!["delete".to_string(), "--force".to_string(), id.to_string()]
+        );
+    }
+
+    #[test]
+    fn unarchive_passes_only_the_session_id() {
+        let id = "019fa33b-1ff5-7110-b9a4-82c5a1a86484";
+        assert_eq!(
+            super::unarchive_args(id).unwrap(),
+            vec!["unarchive".to_string(), id.to_string()]
         );
     }
 

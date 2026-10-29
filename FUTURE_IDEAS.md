@@ -1,6 +1,9 @@
-# TODO
+# Future ideas
 
-## Propagate renames to the tools themselves
+Ideas that are deferred on purpose. They are not current work. Move an idea into a todo only when it is picked up.
+Features are in [FEATURES.md](FEATURES.md); decisions are in [DECISIONS.md](DECISIONS.md).
+
+## Propagate renames to the tools themselves (2026-08-13)
 
 Today `m` sets a szpont-local title in `sessions_meta`; the tool's own session name is
 untouched. Each tool does store a writable title:

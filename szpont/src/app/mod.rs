@@ -27,7 +27,7 @@ pub enum AppEvent {
 pub enum Action {
     None,
     Quit,
-    Launch { spec: LaunchSpec, exec: bool },
+    Launch { spec: LaunchSpec, replace: bool },
     Refresh,
 }
 
@@ -579,8 +579,8 @@ impl App {
                 self.remember_selection();
                 Action::None
             }
-            KeyCode::Enter => self.launch_selected(false),
-            KeyCode::Char('E') => self.launch_selected(true),
+            KeyCode::Enter => self.launch_selected(true),
+            KeyCode::Char('E') => self.launch_selected(false),
             KeyCode::Char('a') => {
                 self.toggle_archive();
                 Action::None
@@ -1114,7 +1114,10 @@ impl App {
             ));
             return Action::None;
         }
-        Action::Launch { spec, exec: false }
+        Action::Launch {
+            spec,
+            replace: true,
+        }
     }
 
     fn new_session_cwd(&self) -> PathBuf {
@@ -1215,7 +1218,7 @@ impl App {
         }
     }
 
-    fn launch_selected(&mut self, exec: bool) -> Action {
+    fn launch_selected(&mut self, replace: bool) -> Action {
         let Some(row) = self.selected_row() else {
             return Action::None;
         };
@@ -1237,7 +1240,7 @@ impl App {
             ));
             return Action::None;
         }
-        Action::Launch { spec, exec }
+        Action::Launch { spec, replace }
     }
 
     fn move_selection(&mut self, delta: i64) {
@@ -1728,6 +1731,31 @@ mod tests {
         );
         assert!(app.rows[0].session.native_archived);
         assert!(app.rows[0].completed);
+    }
+
+    #[test]
+    fn enter_leaves_szpont_and_shift_e_comes_back_to_it() {
+        let mut app = test_app("launch-mode");
+        match app.handle_key(key(KeyCode::Enter)) {
+            Action::Launch { replace, .. } => assert!(replace, "enter must not return to szpont"),
+            _ => panic!("enter did not launch"),
+        }
+        match app.handle_key(KeyEvent::new(KeyCode::Char('E'), KeyModifiers::SHIFT)) {
+            Action::Launch { replace, .. } => assert!(!replace, "E must run here and come back"),
+            _ => panic!("E did not launch"),
+        }
+    }
+
+    #[test]
+    fn a_new_session_also_leaves_szpont() {
+        let mut app = test_app("launch-mode-new");
+        let tool = ToolId::Claude;
+        match app.launch_new_session(tool) {
+            Action::Launch { replace, .. } => {
+                assert!(replace, "a new session must not return to szpont");
+            }
+            _ => panic!("new session did not launch"),
+        }
     }
 
     #[test]

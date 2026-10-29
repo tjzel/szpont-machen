@@ -107,22 +107,21 @@ fn event_loop(
                     app.apply_next_snapshot = true;
                     scanner.refresh();
                 }
-                Action::Launch { spec, exec } => {
-                    if exec {
-                        restore_terminal(terminal)?;
-                        scanner.quit();
-                        return exec_replace(&spec);
-                    }
-                    let outcome = if in_tmux() {
-                        match tmux_open_window(&spec) {
+                Action::Launch { spec, replace } => {
+                    let outcome = match launch_style(replace, in_tmux()) {
+                        LaunchStyle::Replace => {
+                            restore_terminal(terminal)?;
+                            scanner.quit();
+                            return exec_replace(&spec);
+                        }
+                        LaunchStyle::TmuxWindow => match tmux_open_window(&spec) {
                             Ok(()) => format!("{} opened in a new tmux window", spec.program),
                             Err(err) => {
                                 crate::logging::warn(&format!("tmux new-window failed: {err:#}"));
                                 suspend_and_run(terminal, &spec)
                             }
-                        }
-                    } else {
-                        suspend_and_run(terminal, &spec)
+                        },
+                        LaunchStyle::Here => suspend_and_run(terminal, &spec),
                     };
                     app.status = Some(outcome);
                     app.apply_next_snapshot = true;
@@ -149,6 +148,21 @@ fn event_loop(
                 }
             }
         }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum LaunchStyle {
+    Replace,
+    TmuxWindow,
+    Here,
+}
+
+fn launch_style(replace: bool, in_tmux: bool) -> LaunchStyle {
+    match (replace, in_tmux) {
+        (true, true) => LaunchStyle::TmuxWindow,
+        (true, false) => LaunchStyle::Replace,
+        (false, _) => LaunchStyle::Here,
     }
 }
 
@@ -298,6 +312,14 @@ mod tests {
     use std::path::PathBuf;
 
     use super::*;
+
+    #[test]
+    fn enter_replaces_szpont_unless_tmux_can_give_it_a_window() {
+        assert_eq!(launch_style(true, false), LaunchStyle::Replace);
+        assert_eq!(launch_style(true, true), LaunchStyle::TmuxWindow);
+        assert_eq!(launch_style(false, false), LaunchStyle::Here);
+        assert_eq!(launch_style(false, true), LaunchStyle::Here);
+    }
 
     #[test]
     fn shell_escape_passes_safe_args_and_quotes_the_rest() {

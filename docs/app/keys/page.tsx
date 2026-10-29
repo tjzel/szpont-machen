@@ -30,14 +30,15 @@ export default function Keys() {
               <code>Enter</code>
             </td>
             <td>
-              resume the selected session (suspends szpont, returns on exit)
+              resume the selected session (szpont steps aside; inside tmux the
+              session opens in a new window)
             </td>
           </tr>
           <tr>
             <td>
               <code>E</code>
             </td>
-            <td>resume and replace the szpont process</td>
+            <td>resume in this window and come back to szpont on exit</td>
           </tr>
           <tr>
             <td>

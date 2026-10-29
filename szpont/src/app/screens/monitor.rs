@@ -1177,7 +1177,7 @@ fn fit_status(status: &str, hints: &[Span<'static>], width: usize, cap: u16) -> 
 
 fn browse_hints(app: &App) -> Vec<(&'static str, &'static str)> {
     let archived = app.screen == Screen::Archive || app.tree_of_archive();
-    let mut hints = vec![("enter", "resume"), ("E", "run here")];
+    let mut hints = vec![("enter", "resume"), ("E", "run here and come back")];
     hints.push(if archived {
         ("u", "reopen")
     } else {

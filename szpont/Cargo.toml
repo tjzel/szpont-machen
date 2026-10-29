@@ -1,6 +1,6 @@
 [package]
 name = "szpont"
-version = "1.0.10"
+version = "1.0.11"
 edition = "2024"
 rust-version = "1.91"
 description = "szpont machen — AI session manager TUI for Claude Code, Codex and Kimi Code"

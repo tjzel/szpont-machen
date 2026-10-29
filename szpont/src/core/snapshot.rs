@@ -316,6 +316,7 @@ mod tests {
     struct StubAdapter {
         sessions: Vec<SessionSummary>,
         refresh_count: Option<Rc<Cell<usize>>>,
+        enrich_cwd: Option<PathBuf>,
     }
 
     impl ToolAdapter for StubAdapter {
@@ -343,7 +344,10 @@ mod tests {
             if let Some(count) = &self.refresh_count {
                 count.set(count.get() + 1);
             }
-            Ok(Enrichment::default())
+            Ok(Enrichment {
+                cwd: self.enrich_cwd.clone(),
+                ..Enrichment::default()
+            })
         }
 
         fn liveness(&self, _session: &SessionSummary) -> Liveness {
@@ -398,6 +402,7 @@ mod tests {
         vec![Box::new(StubAdapter {
             sessions,
             refresh_count: None,
+            enrich_cwd: None,
         })]
     }
 
@@ -507,6 +512,7 @@ mod tests {
                 summary("private", Some("Secret")),
             ],
             refresh_count: Some(Rc::clone(&count)),
+            enrich_cwd: None,
         })];
         let allowlist = allowlist("filter", Some("Safe title"), true);
         let rows =
@@ -535,6 +541,44 @@ mod tests {
         let rows =
             collect_sessions_with(&adapters, &mut store, &mut |_| {}, Some(&allowlist)).unwrap();
         assert_eq!(rows[0].session.title.as_deref(), Some("Mine"));
+    }
+
+    #[test]
+    fn newer_existing_cwd_replaces_a_stored_deleted_cwd() {
+        let mut store = test_store("cwd-moved");
+        let existing = PathBuf::from(".tmp/fixtures");
+        std::fs::create_dir_all(&existing).unwrap();
+        let deleted = existing.join("snapshot-moved-away");
+        let _ = std::fs::remove_dir_all(&deleted);
+        upsert_session_facts(
+            store.conn(),
+            ToolId::Claude,
+            "moved",
+            deleted.to_str(),
+            None,
+            None,
+            None,
+            None,
+            None,
+            "scan",
+        )
+        .unwrap();
+        let key = SessionKey {
+            tool: ToolId::Claude,
+            id: "moved".to_string(),
+        };
+        for enrich_cwd in [Some(existing.clone()), None] {
+            let adapters: Vec<Box<dyn ToolAdapter>> = vec![Box::new(StubAdapter {
+                sessions: vec![summary("moved", None)],
+                refresh_count: None,
+                enrich_cwd,
+            })];
+            let rows = collect_sessions_with(&adapters, &mut store, &mut |_| {}, None).unwrap();
+            assert_eq!(rows.len(), 1);
+            assert_eq!(rows[0].session.cwd.as_deref(), Some(existing.as_path()));
+            let meta = store.session_meta_map().unwrap();
+            assert_eq!(meta.get(&key).unwrap().cwd.as_deref(), existing.to_str());
+        }
     }
 
     #[test]

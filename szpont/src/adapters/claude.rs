@@ -297,16 +297,14 @@ fn parse_claude_file(
             || line.contains("\"aiTitle\"")
             || line.contains("\"customTitle\"")
             || line.contains("\"lastPrompt\"")
-            || (enrich.cwd.is_none() && line.contains("\"cwd\""));
+            || (track_context && line.contains("\"cwd\""));
         if !interesting {
             continue;
         }
         let Ok(parsed) = serde_json::from_str::<ClaudeLine>(&line) else {
             continue;
         };
-        if enrich.cwd.is_none()
-            && let Some(cwd) = parsed.cwd
-        {
+        if track_context && let Some(cwd) = parsed.cwd {
             enrich.cwd = Some(PathBuf::from(cwd));
         }
         if let Some(title) = parsed.custom_title {
@@ -620,6 +618,49 @@ mod tests {
         let (_, _, _) = parse_all(&path, consumed, &mut usage, &mut ring);
         assert_eq!(usage.input_uncached, 11);
         assert_eq!(usage.output, 22);
+    }
+
+    fn cwd_line(cwd: &str) -> String {
+        format!("{{\"type\":\"user\",\"cwd\":\"{cwd}\",\"sessionId\":\"x\"}}\n")
+    }
+
+    #[test]
+    fn last_cwd_in_transcript_wins() {
+        let path = fixture_path("cwd-moved.jsonl");
+        std::fs::write(
+            &path,
+            format!(
+                "{}{}{}",
+                cwd_line("/tmp/old"),
+                cwd_line("/tmp"),
+                cwd_line("/tmp/new")
+            ),
+        )
+        .unwrap();
+        let mut usage = Usage::default();
+        let mut ring = VecDeque::new();
+        let (_, enrich, _) = parse_all(&path, 0, &mut usage, &mut ring);
+        assert_eq!(enrich.cwd.as_deref(), Some(Path::new("/tmp/new")));
+    }
+
+    #[test]
+    fn incremental_parse_updates_cwd_and_keeps_it_when_absent() {
+        let path = fixture_path("cwd-incremental.jsonl");
+        std::fs::write(&path, cwd_line("/tmp/a")).unwrap();
+        let mut usage = Usage::default();
+        let mut ring = VecDeque::new();
+        let (consumed, enrich, _) = parse_all(&path, 0, &mut usage, &mut ring);
+        assert_eq!(enrich.cwd.as_deref(), Some(Path::new("/tmp/a")));
+        let mut appended = std::fs::read(&path).unwrap();
+        appended.extend_from_slice(cwd_line("/tmp/b").as_bytes());
+        std::fs::write(&path, &appended).unwrap();
+        let (consumed, enrich, _) = parse_all(&path, consumed, &mut usage, &mut ring);
+        assert_eq!(enrich.cwd.as_deref(), Some(Path::new("/tmp/b")));
+        appended
+            .extend_from_slice(b"{\"type\":\"ai-title\",\"aiTitle\":\"T\",\"sessionId\":\"x\"}\n");
+        std::fs::write(&path, &appended).unwrap();
+        let (_, enrich, _) = parse_all(&path, consumed, &mut usage, &mut ring);
+        assert_eq!(enrich.cwd, None);
     }
 
     #[test]
